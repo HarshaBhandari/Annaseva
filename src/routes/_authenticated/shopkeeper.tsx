@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, CalendarCheck, LayoutDashboard, MessageSquareWarning, Package, Wheat } from "lucide-react";
+import { Bell, CalendarCheck, CircleAlert, LayoutDashboard, MessageSquareWarning, Package, Wheat } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
-import { EmptyState, LoadingBlock, RoleShell, StatCard, StatusChip } from "@/components/annaseva-ui";
+import { EmptyState, LoadingBlock, RoleShell, StatusChip } from "@/components/annaseva-ui";
 
 export const Route = createFileRoute("/_authenticated/shopkeeper")({
   head: () => ({
@@ -119,16 +119,88 @@ function DashboardTab({ fpsId }: { fpsId: string }) {
   const distributions = data?.distributions;
 
   const today = new Date().toISOString().slice(0, 10);
-  const pending = bookings?.filter((b) => b.status === "pending").length ?? 0;
-  const lowStock = stock?.filter((s) => s.closing_stock <= s.minimum_threshold).length ?? 0;
-  const todayCount = distributions?.filter((d) => d.distribution_date === today).length ?? 0;
+  const pending = bookings?.filter((booking: any) => booking.status === "pending").length ?? 0;
+  const lowStock = stock?.filter((item: any) => item.closing_stock <= item.minimum_threshold).length ?? 0;
+  const todayCount = distributions?.filter((distribution: any) => distribution.distribution_date === today).length ?? 0;
+
+  const metrics = [
+    { label: "Pending bookings", value: pending, icon: CalendarCheck },
+    { label: "Distributed today", value: todayCount, icon: Wheat },
+    { label: "Low-stock items", value: lowStock, icon: CircleAlert },
+    { label: "Total bookings", value: bookings?.length ?? 0, icon: LayoutDashboard },
+  ];
 
   return (
-    <div className="grid grid-cols-2 gap-3">
-      <StatCard icon={CalendarCheck} label="Pending bookings" value={pending} tone="accent" />
-      <StatCard icon={Wheat} label="Distributions today" value={todayCount} tone="secondary" />
-      <StatCard icon={Package} label="Low-stock items" value={lowStock} tone={lowStock ? "destructive" : "primary"} />
-      <StatCard icon={LayoutDashboard} label="Total bookings" value={bookings?.length ?? 0} tone="primary" />
+    <div className="space-y-4">
+      <section className="annaseva-gradient-header overflow-hidden rounded-xl p-5 text-primary-foreground shadow-sm sm:p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase opacity-75">Shop operations</p>
+            <h2 className="mt-1 text-xl font-bold">Today at a glance</h2>
+            <p className="mt-1 text-sm opacity-80">Bookings, daily distribution, and stock health.</p>
+          </div>
+          <Wheat className="h-8 w-8 shrink-0 opacity-85" />
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-y-4 border-t border-primary-foreground/20 pt-4 sm:grid-cols-4">
+          {metrics.map(({ label, value, icon: Icon }, index) => (
+            <div key={label} className={`flex items-center gap-3 ${index % 2 === 0 ? "sm:border-r sm:border-primary-foreground/20" : ""} ${index < 2 ? "sm:pb-1" : "sm:pt-1"}`}>
+              <Icon className="h-5 w-5 shrink-0 opacity-80" />
+              <div>
+                <p className="text-2xl font-bold tabular-nums">{value}</p>
+                <p className="text-xs opacity-75">{label}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section className="annaseva-card overflow-hidden">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="flex items-center gap-2"><Package className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold text-foreground">Stock health</h3></div>
+            <span className="text-xs text-muted-foreground">{stock?.length ?? 0} items</span>
+          </div>
+          {stock?.length ? (
+            <div className="divide-y divide-border px-4">
+              {stock.slice(0, 5).map((item: any) => {
+                const low = Number(item.closing_stock) <= Number(item.minimum_threshold);
+                return (
+                  <div key={item.item_name} className="flex items-center justify-between gap-3 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-foreground">{item.item_name}</p>
+                      <p className="text-xs text-muted-foreground">Reserve {item.minimum_threshold} {item.unit}</p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-sm font-bold tabular-nums text-foreground">{item.closing_stock} {item.unit}</p>
+                      <p className={`text-xs font-semibold ${low ? "text-warning-foreground" : "text-secondary"}`}>{low ? "Reorder needed" : "Available"}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : <p className="px-4 py-6 text-sm text-muted-foreground">No stock records are available.</p>}
+        </section>
+
+        <section className="annaseva-card overflow-hidden">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+            <div className="flex items-center gap-2"><CalendarCheck className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold text-foreground">Recent bookings</h3></div>
+            <span className="text-xs text-muted-foreground">Latest activity</span>
+          </div>
+          {bookings?.length ? (
+            <div className="divide-y divide-border px-4">
+              {bookings.slice(0, 5).map((booking: any) => (
+                <div key={booking.id} className="flex items-center justify-between gap-3 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">{booking.booking_code}</p>
+                    <p className="text-xs text-muted-foreground">{booking.collection_date} · {booking.collection_slot}</p>
+                  </div>
+                  <StatusChip status={booking.status} />
+                </div>
+              ))}
+            </div>
+          ) : <p className="px-4 py-6 text-sm text-muted-foreground">No bookings yet. New collection requests will appear here.</p>}
+        </section>
+      </div>
     </div>
   );
 }
@@ -136,7 +208,8 @@ function DashboardTab({ fpsId }: { fpsId: string }) {
 function BookingsTab({ fpsId }: { fpsId: string }) {
   const queryClient = useQueryClient();
   const [reason, setReason] = useState<Record<string, string>>({});
-  const { data: bookings, isLoading } = useQuery({
+  const [error, setError] = useState<string | null>(null);
+  const { data: bookings, isLoading, isError, error: queryError } = useQuery({
     queryKey: ["shop-bookings", fpsId],
     queryFn: () => apiGet<any[]>("/shopkeeper/bookings"),
   });
@@ -145,14 +218,21 @@ function BookingsTab({ fpsId }: { fpsId: string }) {
     mutationFn: async ({ id, status, rejection_reason }: { id: string; status: string; rejection_reason?: string }) => {
       await apiPatch(`/shopkeeper/bookings/${id}`, { status, rejectionReason: rejection_reason });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["shop-bookings", fpsId] }),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["shop-bookings", fpsId] }),
+      queryClient.invalidateQueries({ queryKey: ["shop-approved-bookings", fpsId] }),
+      queryClient.invalidateQueries({ queryKey: ["shop-dashboard", fpsId] }),
+    ]),
+    onError: (mutationError: Error) => setError(mutationError.message),
   });
 
   if (isLoading) return <LoadingBlock />;
+  if (isError) return <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">Could not load bookings: {queryError.message}</p>;
   if (!bookings?.length) return <EmptyState title="No bookings yet" hint="Beneficiary bookings for your shop will appear here." />;
 
   return (
     <div className="space-y-3">
+      {error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
       {bookings.map((b: any) => (
         <div key={b.id} className="annaseva-card p-4">
           <div className="flex items-center justify-between">
@@ -206,8 +286,8 @@ function DistributeTab({ fpsId, userId }: { fpsId: string; userId: string }) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const { data: approved, isLoading } = useQuery({
-    queryKey: ["shop-bookings", fpsId],
+  const { data: approved, isLoading, isError, error: queryError } = useQuery({
+    queryKey: ["shop-approved-bookings", fpsId],
     queryFn: () => apiGet<any[]>("/shopkeeper/bookings?status=approved"),
   });
 
@@ -219,12 +299,15 @@ function DistributeTab({ fpsId, userId }: { fpsId: string; userId: string }) {
       setConfirmId(null);
       setError(null);
       queryClient.invalidateQueries({ queryKey: ["shop-bookings", fpsId] });
+      queryClient.invalidateQueries({ queryKey: ["shop-approved-bookings", fpsId] });
       queryClient.invalidateQueries({ queryKey: ["shop-stock", fpsId] });
+      queryClient.invalidateQueries({ queryKey: ["shop-dashboard", fpsId] });
     },
     onError: (e: Error) => setError(e.message),
   });
 
   if (isLoading) return <LoadingBlock />;
+  if (isError) return <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">Could not load approved bookings: {queryError.message}</p>;
   if (!approved?.length) return <EmptyState title="No approved bookings" hint="Approve bookings first, then record distribution here." />;
 
   return (
@@ -282,7 +365,8 @@ function DistributeTab({ fpsId, userId }: { fpsId: string; userId: string }) {
 function StockTab({ fpsId }: { fpsId: string }) {
   const queryClient = useQueryClient();
   const [received, setReceived] = useState<Record<string, string>>({});
-  const { data: stock, isLoading } = useQuery({
+  const [error, setError] = useState<string | null>(null);
+  const { data: stock, isLoading, isError, error: queryError } = useQuery({
     queryKey: ["shop-stock", fpsId],
     queryFn: () => apiGet<any[]>("/shopkeeper/stock"),
   });
@@ -295,13 +379,23 @@ function StockTab({ fpsId }: { fpsId: string }) {
     mutationFn: async ({ row, qty }: { row: any; qty: number }) => {
       await apiPost(`/shopkeeper/stock/${row.id}/receive`, { quantity: qty });
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["shop-stock", fpsId] }),
+    onSuccess: (_result, { row }) => {
+      setReceived((values) => ({ ...values, [row.id]: "" }));
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["shop-stock", fpsId] }),
+        queryClient.invalidateQueries({ queryKey: ["shop-refills", fpsId] }),
+        queryClient.invalidateQueries({ queryKey: ["shop-dashboard", fpsId] }),
+      ]);
+    },
+    onError: (mutationError: Error) => setError(mutationError.message),
   });
 
   if (isLoading) return <LoadingBlock />;
+  if (isError) return <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">Could not load stock: {queryError.message}</p>;
 
   return (
     <div className="space-y-3">
+      {error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
       {stock?.map((s: any) => {
         const low = s.closing_stock <= s.minimum_threshold;
         return (
@@ -312,20 +406,20 @@ function StockTab({ fpsId }: { fpsId: string }) {
                 {s.closing_stock} {s.ration_items?.unit} {low ? "· Low" : ""}
               </span>
             </div>
-            <div className="mt-2 grid grid-cols-4 gap-2 text-center text-[11px] text-muted-foreground">
+            <div className="mt-2 grid grid-cols-2 gap-2 text-center text-[11px] text-muted-foreground sm:grid-cols-4">
               <div><p className="font-bold text-foreground">{s.opening_stock}</p>Opening</div>
               <div><p className="font-bold text-foreground">{s.received_stock}</p>Received</div>
               <div><p className="font-bold text-foreground">{s.distributed_stock}</p>Distributed</div>
               <div><p className="font-bold text-foreground">{s.minimum_threshold}</p>Min. level</div>
             </div>
-            <div className="mt-3 flex gap-2">
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
               <input
                 type="number"
                 min={1}
                 value={received[s.id] ?? ""}
                 onChange={(e) => setReceived((r) => ({ ...r, [s.id]: e.target.value }))}
                 placeholder={`Qty needed (${s.ration_items?.unit})`}
-                className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-xs"
               />
               <button
                 onClick={() => {
@@ -333,7 +427,7 @@ function StockTab({ fpsId }: { fpsId: string }) {
                   if (qty > 0) addStock.mutate({ row: s, qty });
                 }}
                 disabled={addStock.isPending}
-                className="rounded-lg bg-secondary px-4 py-2 text-xs font-bold text-secondary-foreground disabled:opacity-50"
+                className="w-full shrink-0 rounded-lg bg-secondary px-4 py-2 text-xs font-bold text-secondary-foreground disabled:opacity-50 sm:w-auto"
               >
                 Request refill
               </button>

@@ -18,16 +18,21 @@ cd Annaseva
 npm ci
 ```
 
-Start the MySQL service. For a new local database, create the tables and demo data from Command Prompt:
+Start the MySQL service. For a new local database, run the complete database file once from Command Prompt. It creates all current tables and adds synthetic demo shops, ration items, entitlements, stock, and forecasts:
 
 ```cmd
 "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p < "mysql\annaseva.mysql.sql"
 ```
 
-For an existing database, apply only additive operational tables without reseeding or resetting stock:
+This is the only SQL file needed for a fresh setup. It does not contain user accounts or beneficiary personal data; each friend should create their own account in the app. Do not run this file against an existing/live database because its demo seed statements can reset demo inventory values.
+
+For an existing database created from an older version, apply the relevant upgrade scripts once instead of running the fresh-install file. Do not run these upgrades on a database initialized by the current `annaseva.mysql.sql`:
 
 ```cmd
 "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p < "mysql\upgrade_verification_ops.sql"
+"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p < "mysql\upgrade_ration_registration.sql"
+"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p < "mysql\upgrade_household_bookings.sql"
+"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p < "mysql\upgrade_beneficiary_profile_details.sql"
 ```
 
 Copy the MySQL template to `.env` and set `MYSQL_PASSWORD` to your local MySQL password. Keep `.env` private; it is excluded from Git.
@@ -79,4 +84,8 @@ This switches the app runtime to MySQL. The original hosted Supabase project, if
 
 Beneficiaries request and verify a development-only OTP, submit only the last four Aadhaar digits for manual admin review, and can book only after approval. In development, the simulated OTP is shown in the app; no SMS is sent. This demo does not verify Aadhaar with UIDAI and does not collect face images, fingerprints, or biometric templates. Production verification requires an approved identity/SMS provider and any required consent, legal review, and hardware.
 
-Admins can review identity submissions, open/close shops, approve/reject stock refill requests, view stock and operational alerts, and resolve complaints. Shopkeepers can review complaints for their shop, respond to beneficiaries, track refill requests, and see booking/shop/refill notifications.
+The beneficiary profile can display household names, Aadhaar address and linked mobile, scheme, and FPS contact/location when these are present in the database. The current app does not connect to UIDAI or a ration-card registry, so those details must come from a verified, authorized import/provider integration; the new nullable profile fields and `ration_card_members` table only provide storage and display support.
+
+Beneficiaries can select collection dates from tomorrow through the end of the current month; next month's ration can only be booked next month. Accounts registered with the same ration-card number share a household limit of one booking per collection month. Mobile OTP verification is required again each month before booking, along with admin identity approval. The admin dashboard lists households with no recorded distribution for three months.
+
+Admins can review identity submissions, open/close shops, approve/reject stock refill requests, view stock and operational alerts, monitor uncollected entitlements, and resolve complaints. Shopkeepers can review complaints for their shop, respond to beneficiaries, track refill requests, and see booking/shop/refill notifications.

@@ -5,6 +5,7 @@ import {
   BadgeCheck,
   Bell,
   Boxes,
+  CalendarClock,
   ChartNoAxesCombined,
   CircleAlert,
   ClipboardCheck,
@@ -42,7 +43,7 @@ export const Route = createFileRoute("/_authenticated/admin")({
   component: AdminPage,
 });
 
-type AdminTab = "dashboard" | "shops" | "stock" | "verification" | "refills" | "complaints";
+type AdminTab = "dashboard" | "shops" | "stock" | "verification" | "refills" | "complaints" | "uncollected";
 
 function AdminPage() {
   const navigate = useNavigate();
@@ -68,6 +69,7 @@ function AdminPage() {
         { id: "verification", label: "Identity", icon: BadgeCheck },
         { id: "refills", label: "Refills", icon: Boxes },
         { id: "complaints", label: "Complaints", icon: MessageSquareWarning },
+        { id: "uncollected", label: "Uncollected", icon: CalendarClock },
       ]}
     >
       {tab === "dashboard" && <DashboardTab />}
@@ -76,6 +78,7 @@ function AdminPage() {
       {tab === "verification" && <VerificationTab />}
       {tab === "refills" && <RefillsTab />}
       {tab === "complaints" && <ComplaintsTab />}
+      {tab === "uncollected" && <UncollectedTab />}
     </RoleShell>
   );
 }
@@ -265,6 +268,40 @@ function VerificationTab() {
             <button onClick={() => review.mutate({ userId: reviewRow.user_id, status: "rejected" })} disabled={review.isPending} className="flex-1 rounded-lg bg-destructive/10 px-3 py-2 text-xs font-bold text-destructive disabled:opacity-50">Reject</button>
           </div>
           <p className="text-xs text-muted-foreground">This is a manual demo review of the submitted last four digits, not an official Aadhaar verification.</p>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function UncollectedTab() {
+  const { data: households, isLoading, isError, error } = useQuery({
+    queryKey: ["admin-uncollected-entitlements"],
+    queryFn: () => apiGet<any[]>("/admin/uncollected-entitlements"),
+    refetchInterval: 60_000,
+  });
+
+  if (isLoading) return <LoadingBlock label="Loading uncollected entitlements…" />;
+  if (isError) {
+    return <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error instanceof Error ? error.message : "Could not load uncollected entitlements."}</p>;
+  }
+  if (!households?.length) {
+    return <EmptyState title="No uncollected entitlements" hint="Households without a recorded ration distribution for three months will appear here." />;
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">Households with no ration distribution recorded in the last three months.</p>
+      {households.map((household) => (
+        <article key={household.household_key} className="annaseva-card space-y-1 p-4">
+          <h3 className="font-bold text-foreground">{household.beneficiary_name} household</h3>
+          <p className="text-sm text-muted-foreground">
+            {household.household_accounts} account{Number(household.household_accounts) === 1 ? "" : "s"} · {household.card_categories || "Card category unavailable"}
+          </p>
+          <p className="text-xs text-muted-foreground">Fair price shop: {household.shop_names || "Not assigned"}</p>
+          <p className="text-xs text-muted-foreground">
+            Last booking: {household.last_booking_date ?? "No booking in the last three months"} · Last distribution: {household.last_distribution_date ?? "None recorded"}
+          </p>
         </article>
       ))}
     </div>

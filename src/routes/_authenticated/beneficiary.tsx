@@ -1,10 +1,34 @@
 import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BadgeCheck, Bell, CalendarCheck, Home, User, Wheat } from "lucide-react";
-import { apiGet, apiPatch, apiPost } from "@/lib/api";
+import {
+  BadgeCheck,
+  Bell,
+  CalendarCheck,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  CircleAlert,
+  CreditCard,
+  Home,
+  MapPin,
+  Package,
+  Pencil,
+  Phone,
+  Trash2,
+  User,
+  Users,
+  Wheat,
+} from "lucide-react";
+import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { CARD_CATEGORIES, SLOTS } from "@/lib/annaseva";
-import { EmptyState, LoadingBlock, RoleShell, StatCard, StatusChip } from "@/components/annaseva-ui";
+import {
+  EmptyState,
+  LoadingBlock,
+  RoleShell,
+  StatCard,
+  StatusChip,
+} from "@/components/annaseva-ui";
 
 export const Route = createFileRoute("/_authenticated/beneficiary")({
   head: () => ({
@@ -50,7 +74,7 @@ function BeneficiaryPage() {
   const { user } = Route.useRouteContext();
   const [tab, setTab] = useState("home");
 
-  const { data: profile, isLoading } = useQuery({
+  const { data: profile, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ["beneficiary-profile", user.id],
     queryFn: () => apiGet<any>("/beneficiary/profile"),
   });
@@ -61,6 +85,32 @@ function BeneficiaryPage() {
   };
 
   if (isLoading) return <LoadingBlock label="Loading your profile…" />;
+  if (isError) {
+    return (
+      <div className="mx-auto max-w-md p-4 pt-10">
+        <div className="annaseva-card space-y-3 p-6">
+          <h1 className="text-lg font-bold text-foreground">Could not load your beneficiary profile</h1>
+          <p className="text-sm text-muted-foreground">
+            Your profile was not changed. Try again; if the problem continues, share the error below
+            with your administrator.
+          </p>
+          {error instanceof Error && (
+            <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error.message}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="w-full rounded-lg bg-primary py-2.5 text-sm font-bold text-primary-foreground disabled:opacity-50"
+          >
+            {isFetching ? "Retrying…" : "Try again"}
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!profile) return <Onboarding userId={user.id} onDone={() => queryClient.invalidateQueries({ queryKey: ["beneficiary-profile", user.id] })} />;
 
   return (
@@ -72,16 +122,20 @@ function BeneficiaryPage() {
       onSignOut={signOut}
       items={[
         { id: "home", label: "Home", icon: Home },
+        { id: "stock", label: "Stock", icon: Package },
         { id: "book", label: "Book", icon: CalendarCheck },
         { id: "bookings", label: "Bookings", icon: Wheat },
         { id: "alerts", label: "Alerts", icon: Bell },
+        { id: "scheme", label: "Scheme", icon: CreditCard },
         { id: "profile", label: "Profile", icon: User },
       ]}
     >
       {tab === "home" && <HomeTab profile={profile} />}
+      {tab === "stock" && <StockTab profile={profile} />}
       {tab === "book" && <BookTab profile={profile} onBooked={() => setTab("bookings")} />}
       {tab === "bookings" && <BookingsTab profile={profile} />}
       {tab === "alerts" && <AlertsTab userId={user.id} />}
+      {tab === "scheme" && <SchemeTab profile={profile} />}
       {tab === "profile" && <ProfileTab profile={profile} />}
     </RoleShell>
   );
@@ -153,7 +207,7 @@ function Onboarding({ userId, onDone }: { userId: string; onDone: () => void }) 
   );
 }
 
-function VerificationTab({ userId, onVerified }: { userId: string; onVerified: () => void }) {
+function VerificationTab({ userId }: { userId: string }) {
   const queryClient = useQueryClient();
   const [code, setCode] = useState("");
   const [aadhaarLast4, setAadhaarLast4] = useState("");
@@ -178,7 +232,6 @@ function VerificationTab({ userId, onVerified }: { userId: string; onVerified: (
       setDemoCode(null);
       setCode("");
       await queryClient.invalidateQueries({ queryKey: ["user-verification", userId] });
-      onVerified();
     },
     onError: (error: Error) => setMessage(error.message),
   });
@@ -196,7 +249,7 @@ function VerificationTab({ userId, onVerified }: { userId: string; onVerified: (
   });
 
   if (isLoading) return <LoadingBlock />;
-  const phoneVerified = Boolean(verification?.phone_verified_at);
+  const phoneVerifiedThisMonth = Boolean(Number(verification?.phone_verified_this_month));
   const identityStatus = verification?.identity_status ?? "not_submitted";
 
   return (
@@ -205,18 +258,18 @@ function VerificationTab({ userId, onVerified }: { userId: string; onVerified: (
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="font-bold text-foreground">Mobile verification</h2>
-            <p className="text-sm text-muted-foreground">Verify the number saved on your account.</p>
+            <p className="text-sm text-muted-foreground">Verify the number saved on your account once every month before booking.</p>
           </div>
-          <StatusChip status={phoneVerified ? "verified" : "pending"} />
+          <StatusChip status={phoneVerifiedThisMonth ? "verified" : "pending"} />
         </div>
-        {!phoneVerified && (
+        {!phoneVerifiedThisMonth && (
           <>
             <button
               onClick={() => sendCode.mutate()}
               disabled={sendCode.isPending}
               className="rounded-lg bg-primary px-4 py-2 text-sm font-bold text-primary-foreground disabled:opacity-50"
             >
-              {sendCode.isPending ? "Requesting…" : "Request OTP"}
+              {sendCode.isPending ? "Requesting…" : verification?.phone_verified_at ? "Request monthly OTP" : "Request OTP"}
             </button>
             {demoCode && <p className="rounded-lg bg-warning/20 p-3 text-sm text-warning-foreground">Development demo code: <strong>{demoCode}</strong></p>}
             <div className="flex gap-2">
@@ -243,8 +296,8 @@ function VerificationTab({ userId, onVerified }: { userId: string; onVerified: (
       <section className="annaseva-card space-y-3 p-5">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="font-bold text-foreground">Optional identity review</h2>
-            <p className="text-sm text-muted-foreground">Mobile OTP verification lets you continue booking. You can submit Aadhaar last four digits for manual admin review.</p>
+            <h2 className="font-bold text-foreground">Admin identity review</h2>
+            <p className="text-sm text-muted-foreground">Submit only your Aadhaar last four digits. An administrator must approve them before you can book.</p>
           </div>
           <StatusChip status={identityStatus} />
         </div>
@@ -264,7 +317,7 @@ function VerificationTab({ userId, onVerified }: { userId: string; onVerified: (
             {verification?.review_note && <p className="rounded-lg bg-muted p-3 text-sm text-foreground">Review note: {verification.review_note}</p>}
             <button
               onClick={() => submitIdentity.mutate()}
-              disabled={!phoneVerified || aadhaarLast4.length !== 4 || submitIdentity.isPending}
+              disabled={!phoneVerifiedThisMonth || aadhaarLast4.length !== 4 || submitIdentity.isPending}
               className="w-full rounded-lg bg-primary py-2.5 text-sm font-bold text-primary-foreground disabled:opacity-50"
             >
               {submitIdentity.isPending ? "Submitting…" : "Submit for review"}
@@ -283,11 +336,6 @@ function HomeTab({ profile }: { profile: any }) {
     queryKey: ["entitlements", profile.ration_cards?.card_category],
     queryFn: () => apiGet<any[]>(`/beneficiary/entitlements?category=${encodeURIComponent(profile.ration_cards.card_category)}`),
   });
-  const { data: stock } = useQuery({
-    queryKey: ["stock", profile.fps_id],
-    queryFn: () => apiGet<any[]>("/beneficiary/stock"),
-  });
-
   return (
     <>
       <section className={`overflow-hidden rounded-xl p-5 shadow-sm ${profile.ration_cards?.card_category === "Yellow" ? "bg-amber-300 text-amber-950" : profile.ration_cards?.card_category === "Orange" ? "bg-orange-300 text-orange-950" : "border border-border bg-white text-slate-900"}`}>
@@ -333,28 +381,67 @@ function HomeTab({ profile }: { profile: any }) {
           ))}
         </div>
       </section>
-      <section>
-        <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-muted-foreground">
-          Stock at {profile.fps_shops?.shop_name}
-        </h2>
-        <div className="space-y-2">
-          {stock?.map((s: any) => {
-            const low = s.closing_stock <= s.minimum_threshold;
+    </>
+  );
+}
+
+function StockTab({ profile }: { profile: any }) {
+  const { data: stock, isLoading } = useQuery({
+    queryKey: ["stock", profile.fps_id],
+    queryFn: () => apiGet<any[]>("/beneficiary/stock"),
+  });
+  if (isLoading) return <LoadingBlock label="Checking shop availability…" />;
+
+  const items = stock ?? [];
+  const lowCount = items.filter((item: any) => Number(item.closing_stock) <= Number(item.minimum_threshold)).length;
+
+  return (
+    <div className="space-y-4">
+      <section className="annaseva-gradient-header overflow-hidden rounded-xl p-5 text-primary-foreground shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase opacity-75">Fair price shop</p>
+            <h2 className="mt-1 text-xl font-bold">Stock availability</h2>
+            <p className="mt-1 text-sm opacity-80">{profile.fps_shops?.shop_name ?? "Your assigned shop"}</p>
+          </div>
+          <Package className="h-8 w-8 shrink-0 opacity-85" />
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-4 border-t border-primary-foreground/20 pt-4">
+          <div><p className="text-xs opacity-75">Items listed</p><p className="mt-1 text-2xl font-bold tabular-nums">{items.length}</p></div>
+          <div><p className="text-xs opacity-75">Below reserve level</p><p className="mt-1 flex items-center gap-2 text-2xl font-bold tabular-nums">{lowCount}<CircleAlert className="h-5 w-5" /></p></div>
+        </div>
+      </section>
+
+      {items.length ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {items.map((item: any) => {
+            const low = Number(item.closing_stock) <= Number(item.minimum_threshold);
             return (
-              <div key={s.id} className="annaseva-card flex items-center justify-between p-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">{s.ration_items?.item_name}</p>
-                  <p className="text-xs text-muted-foreground">{s.fps_shops?.operating_hours}</p>
+              <article key={item.id} className="annaseva-card relative overflow-hidden p-4">
+                <div className={`absolute inset-y-0 left-0 w-1 ${low ? "bg-warning" : "bg-secondary"}`} />
+                <div className="flex items-start justify-between gap-3 pl-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold uppercase text-muted-foreground">Ration item</p>
+                    <h3 className="mt-1 truncate text-base font-bold text-foreground">{item.ration_items?.item_name}</h3>
+                    <p className="mt-2 text-xs text-muted-foreground">Reserve level: {item.minimum_threshold} {item.ration_items?.unit}</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="text-2xl font-bold tabular-nums text-foreground">{item.closing_stock}</p>
+                    <p className="text-xs text-muted-foreground">{item.ration_items?.unit} available</p>
+                    <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${low ? "bg-warning/20 text-warning-foreground" : "bg-secondary/10 text-secondary"}`}>
+                      {low ? "Low stock" : "Available"}
+                    </span>
+                  </div>
                 </div>
-                <span className={`rounded-full px-3 py-1 text-xs font-bold ${low ? "bg-destructive/10 text-destructive" : "bg-secondary/10 text-secondary"}`}>
-                  {low ? "Low" : "Available"} · {s.closing_stock} {s.ration_items?.unit}
-                </span>
-              </div>
+              </article>
             );
           })}
         </div>
-      </section>
-    </>
+      ) : (
+        <EmptyState title="Stock information unavailable" hint="Your assigned shop has not published stock details yet." />
+      )}
+      <p className="text-xs text-muted-foreground">Availability can change during the day. Confirm with your fair price shop before traveling.</p>
+    </div>
   );
 }
 
@@ -363,7 +450,6 @@ function BookTab({ profile, onBooked }: { profile: any; onBooked: () => void }) 
   const [date, setDate] = useState("");
   const [slot, setSlot] = useState<string>(SLOTS[0]);
   const [error, setError] = useState<string | null>(null);
-  const [showVerification, setShowVerification] = useState(false);
 
   const { data: verification } = useQuery({
     queryKey: ["user-verification", profile.user_id],
@@ -382,14 +468,26 @@ function BookTab({ profile, onBooked }: { profile: any; onBooked: () => void }) 
       await apiPost("/beneficiary/bookings", { collectionDate: date, slot });
     },
     onSuccess: () => {
+      setError(null);
       queryClient.invalidateQueries({ queryKey: ["my-bookings"] });
       onBooked();
     },
     onError: (e: Error) => setError(e.message),
   });
 
-  const minDate = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-  const canBook = Boolean(verification?.phone_verified_at);
+  const today = new Date();
+  const minDate = formatDateInput(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1));
+  const maxDate = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 1, 0));
+  const canBook = Boolean(Number(verification?.phone_verified_this_month) && verification?.identity_status === "verified");
+  const { data: bookings, isLoading: bookingsLoading } = useQuery({
+    queryKey: ["my-bookings", profile.id],
+    queryFn: () => apiGet<any[]>("/beneficiary/bookings"),
+  });
+  const currentMonth = formatDateInput(new Date(today.getFullYear(), today.getMonth(), 1)).slice(0, 7);
+  const currentMonthBooking = bookings?.find((booking: any) =>
+    String(booking.collection_date).slice(0, 7) === currentMonth &&
+    !["rejected", "cancelled"].includes(booking.status),
+  );
 
   return (
     <div className="annaseva-card p-5">
@@ -397,11 +495,17 @@ function BookTab({ profile, onBooked }: { profile: any; onBooked: () => void }) 
       <p className="mt-1 text-sm text-muted-foreground">
         Your full monthly entitlement will be booked. Ration is free — no payment is ever involved.
       </p>
-      {!canBook && <p className="mt-3 rounded-lg bg-warning/20 p-3 text-base text-warning-foreground">Verify your mobile number to continue. OTP verification takes about a minute.</p>}
+      <p className="mt-2 text-xs text-muted-foreground">Choose a collection date this month only. Next month’s ration can only be booked next month. Verify by OTP every month before booking.</p>
+      {currentMonthBooking && (
+        <p role="status" className="mt-3 rounded-lg bg-warning/20 p-3 text-sm font-medium text-warning-foreground">
+          Your family has already booked ration for this month ({currentMonthBooking.booking_code}). You cannot book it again.
+        </p>
+      )}
+      {!canBook && <p className="mt-3 rounded-lg bg-warning/20 p-3 text-sm text-warning-foreground">{!Number(verification?.phone_verified_this_month) ? "Verify your mobile number by OTP this month before booking. Identity approval remains required." : verification?.identity_status === "pending" ? "Your last-four digits are waiting for admin review. Booking will unlock after approval." : verification?.identity_status === "rejected" ? "Your identity review needs attention. Update your last-four digits and resubmit for admin approval." : "Submit your Aadhaar last four digits for admin review to continue booking."}</p>}
       <div className="mt-4 space-y-3">
         <label className="block text-sm">
           <span className="mb-1 block font-medium text-foreground">Collection date</span>
-          <input type="date" min={minDate} value={date} onChange={(e) => setDate(e.target.value)} className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm" />
+          <input type="date" min={minDate} max={maxDate} value={date} onChange={(e) => { setDate(e.target.value); setError(null); }} className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm" />
         </label>
         <div>
           <span className="mb-1 block text-sm font-medium text-foreground">Time slot</span>
@@ -427,31 +531,15 @@ function BookTab({ profile, onBooked }: { profile: any; onBooked: () => void }) 
           ))}
         </div>
         {error && <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-        {!canBook ? (
-          <button
-            onClick={() => setShowVerification((visible) => !visible)}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-primary bg-primary/5 py-3 text-base font-bold text-primary"
-          >
-            <BadgeCheck className="h-5 w-5" />
-            {showVerification ? "Hide verification" : "Verify mobile to book"}
-          </button>
-        ) : (
+        <VerificationTab userId={profile.user_id} />
+        {canBook && (
           <p className="flex items-center gap-2 rounded-lg bg-secondary/10 p-3 text-base font-semibold text-secondary">
-            <BadgeCheck className="h-5 w-5" /> Mobile verified · मोबाईल पडताळला
+            <BadgeCheck className="h-5 w-5" /> Mobile and identity approved · पडताळणी पूर्ण
           </p>
-        )}
-        {showVerification && !canBook && (
-          <VerificationTab
-            userId={profile.user_id}
-            onVerified={() => {
-              setShowVerification(false);
-              setError(null);
-            }}
-          />
         )}
         <button
           onClick={() => book.mutate()}
-          disabled={book.isPending || !canBook}
+          disabled={book.isPending || bookingsLoading || !canBook || Boolean(currentMonthBooking)}
           className="w-full rounded-lg bg-secondary py-2.5 text-sm font-bold text-secondary-foreground disabled:opacity-50"
         >
           {book.isPending ? "Booking…" : "Confirm booking"}
@@ -461,14 +549,45 @@ function BookTab({ profile, onBooked }: { profile: any; onBooked: () => void }) 
   );
 }
 
+function formatDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function BookingsTab({ profile }: { profile: any }) {
+  const queryClient = useQueryClient();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDate, setEditDate] = useState("");
+  const [dateMessage, setDateMessage] = useState<{ bookingId: string; text: string; isError: boolean } | null>(null);
   const { data: bookings, isLoading } = useQuery({
     queryKey: ["my-bookings", profile.id],
     queryFn: () => apiGet<any[]>("/beneficiary/bookings"),
   });
+  const updateDate = useMutation({
+    mutationFn: ({ id, collectionDate }: { id: string; collectionDate: string }) =>
+      apiPatch(`/beneficiary/bookings/${id}/date`, { collectionDate }),
+    onSuccess: async (_result, variables) => {
+      setEditingId(null);
+      setDateMessage({
+        bookingId: variables.id,
+        text: "Date updated and sent to the shopkeeper for approval.",
+        isError: false,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["my-bookings", profile.id] });
+    },
+    onError: (error: Error, variables) => {
+      setDateMessage({ bookingId: variables.id, text: error.message, isError: true });
+    },
+  });
 
   if (isLoading) return <LoadingBlock />;
   if (!bookings?.length) return <EmptyState title="No bookings yet" hint="Book a collection slot from the Book tab." />;
+
+  const today = new Date();
+  const minDate = formatDateInput(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1));
+  const maxDate = formatDateInput(new Date(today.getFullYear(), today.getMonth() + 1, 0));
 
   return (
     <div className="space-y-3">
@@ -482,6 +601,54 @@ function BookingsTab({ profile }: { profile: any }) {
             Collect on {b.collection_date} · {b.collection_slot}
           </p>
           {b.rejection_reason && <p className="mt-1 text-xs text-destructive">Reason: {b.rejection_reason}</p>}
+          {["pending", "approved"].includes(b.status) && (
+            <div className="mt-3 space-y-2">
+              {editingId === b.id ? (
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="date"
+                    min={minDate}
+                    max={maxDate}
+                    value={editDate}
+                    onChange={(event) => setEditDate(event.target.value)}
+                    className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                    aria-label="Updated collection date"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => updateDate.mutate({ id: b.id, collectionDate: editDate })}
+                    disabled={!editDate || editDate === String(b.collection_date).slice(0, 10) || updateDate.isPending}
+                    className="rounded-lg bg-secondary px-3 py-2 text-xs font-bold text-secondary-foreground disabled:opacity-50"
+                  >
+                    {updateDate.isPending ? "Saving…" : "Save date"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setEditingId(null); setDateMessage(null); }}
+                    className="rounded-lg border border-input px-3 py-2 text-xs font-semibold text-foreground"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setEditingId(b.id); setEditDate(String(b.collection_date).slice(0, 10)); setDateMessage(null); }}
+                  className="rounded-lg border border-primary px-3 py-2 text-xs font-bold text-primary"
+                >
+                  Change collection date
+                </button>
+              )}
+              {b.status === "pending" && !editingId && (
+                <p className="text-xs text-warning-foreground">Awaiting shopkeeper approval.</p>
+              )}
+              {dateMessage && dateMessage.bookingId === b.id && (
+                <p role={dateMessage.isError ? "alert" : "status"} className={`rounded-lg p-2 text-sm ${dateMessage.isError ? "bg-destructive/10 text-destructive" : "bg-secondary/10 text-secondary"}`}>
+                  {dateMessage.text}
+                </p>
+              )}
+            </div>
+          )}
           <div className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground">
             {b.booking_items?.map((i: any) => (
               <div key={i.id} className="flex justify-between py-0.5">
@@ -530,11 +697,334 @@ function AlertsTab({ userId }: { userId: string }) {
   );
 }
 
+type SchemeTransaction = {
+  id: string;
+  distribution_code: string;
+  distribution_date: string;
+  status: string;
+  shop_name: string;
+  shop_code: string;
+  shop_address: string;
+  district: string;
+  taluka: string;
+  card_category: string | null;
+  booking_code: string | null;
+  lifting_member: string;
+  scheme_name: string | null;
+  items: { item_name: string; quantity: number; unit: string }[];
+};
+
+type SchemeProfile = {
+  user_id: string;
+  family_size: number;
+  ration_cards?: { card_category?: string | null } | null;
+};
+
+type SchemeEntitlement = {
+  id: string;
+  quantity_per_person: number;
+  ration_items?: { item_name?: string; unit?: string } | null;
+};
+
+function SchemeTab({ profile }: { profile: SchemeProfile }) {
+  const now = new Date();
+  const [selectedMonth, setSelectedMonth] = useState(
+    () => new Date(now.getFullYear(), now.getMonth(), 1),
+  );
+  const category = profile.ration_cards?.card_category ?? undefined;
+  const monthKey = `${selectedMonth.getFullYear()}-${String(selectedMonth.getMonth() + 1).padStart(2, "0")}`;
+  const monthLabel = selectedMonth.toLocaleDateString(undefined, {
+    month: "long",
+    year: "numeric",
+  });
+  const isCurrentOrFutureMonth =
+    selectedMonth.getFullYear() > now.getFullYear() ||
+    (selectedMonth.getFullYear() === now.getFullYear() &&
+      selectedMonth.getMonth() >= now.getMonth());
+  const {
+    data: entitlements,
+    isLoading: entitlementsLoading,
+    isError: entitlementsError,
+    refetch: refetchEntitlements,
+  } = useQuery({
+    queryKey: ["entitlements", category],
+    queryFn: () =>
+      apiGet<SchemeEntitlement[]>(
+        `/beneficiary/entitlements?category=${encodeURIComponent(category ?? "")}`,
+      ),
+    enabled: Boolean(category),
+  });
+  const {
+    data: transactions,
+    isLoading: transactionsLoading,
+    isError: transactionsError,
+    error: transactionsLoadError,
+    refetch: refetchTransactions,
+  } = useQuery({
+    queryKey: ["scheme-transactions", profile.user_id, monthKey],
+    queryFn: () =>
+      apiGet<SchemeTransaction[]>(`/beneficiary/scheme-transactions?month=${monthKey}`),
+  });
+  const schemeName = category === "Yellow" ? "AAY" : category === "Orange" ? "PHH" : null;
+
+  function formatDistributionDate(value: string) {
+    const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+    return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  }
+
+  return (
+    <div className="space-y-4">
+      <section className="annaseva-card overflow-hidden">
+        <div className="bg-primary p-5 text-primary-foreground">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-foreground/15">
+              <CreditCard className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide opacity-80">
+                Your ration scheme
+              </p>
+              <h2 className="text-2xl font-bold">{schemeName ?? "Scheme not assigned"}</h2>
+            </div>
+            <p className="ml-auto rounded-full bg-primary-foreground/15 px-3 py-1 text-xs font-semibold">
+              {category ? `${category} card` : "No card category"}
+            </p>
+          </div>
+          <p className="mt-3 text-sm opacity-85">
+            {schemeName === "AAY"
+              ? "Antyodaya Anna Yojana"
+              : schemeName === "PHH"
+                ? "Priority Household"
+                : "Scheme information will appear when your ration-card category is available."}
+          </p>
+        </div>
+        <div className="p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-bold text-foreground">Monthly entitlement</h3>
+              <p className="text-xs text-muted-foreground">
+                For your household of {profile.family_size}
+              </p>
+            </div>
+            <span className="text-xs text-muted-foreground">per month</span>
+          </div>
+          {entitlementsError ? (
+            <div
+              role="alert"
+              className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              Could not load scheme entitlements.
+              <button
+                type="button"
+                onClick={() => refetchEntitlements()}
+                className="font-semibold underline"
+              >
+                Retry
+              </button>
+            </div>
+          ) : entitlementsLoading ? (
+            <LoadingBlock label="Loading entitlements…" />
+          ) : entitlements?.some((rule) => rule.quantity_per_person > 0) ? (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              {entitlements
+                .filter((rule) => rule.quantity_per_person > 0)
+                .map((rule) => (
+                  <div key={rule.id} className="rounded-lg bg-muted p-3">
+                    <p className="text-xs text-muted-foreground">{rule.ration_items?.item_name}</p>
+                    <p className="mt-1 font-bold text-foreground">
+                      {(rule.quantity_per_person * profile.family_size).toFixed(1)}{" "}
+                      {rule.ration_items?.unit}
+                    </p>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-muted-foreground">
+              No monthly entitlement details are available for this card.
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-bold text-foreground">Sale receipts & previous transactions</h2>
+            <p className="text-xs text-muted-foreground">
+              Completed ration distributions for your household
+            </p>
+          </div>
+        </div>
+        <div className="mb-3 flex items-center justify-between rounded-xl bg-accent px-3 py-2 text-accent-foreground">
+          <button
+            type="button"
+            aria-label="Previous month"
+            onClick={() =>
+              setSelectedMonth(
+                new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() - 1, 1),
+              )
+            }
+            className="rounded-lg p-2 transition hover:bg-black/5"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <div className="text-center">
+            <p className="font-bold">{monthLabel}</p>
+            <p className="text-xs">Distribution history</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Next month"
+            disabled={isCurrentOrFutureMonth}
+            onClick={() =>
+              setSelectedMonth(
+                new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 1),
+              )
+            }
+            className="rounded-lg p-2 transition hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </button>
+        </div>
+
+        {transactionsError ? (
+          <div
+            role="alert"
+            className="annaseva-card flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-destructive"
+          >
+            <span>
+              {transactionsLoadError instanceof Error
+                ? transactionsLoadError.message
+                : "Could not load transaction history."}
+            </span>
+            <button
+              type="button"
+              onClick={() => refetchTransactions()}
+              className="font-semibold underline"
+            >
+              Retry
+            </button>
+          </div>
+        ) : transactionsLoading ? (
+          <LoadingBlock label="Loading transactions…" />
+        ) : transactions?.length ? (
+          <div className="space-y-3">
+            {transactions.map((transaction) => {
+              const location = [transaction.shop_address, transaction.taluka, transaction.district]
+                .filter(Boolean)
+                .join(", ");
+              return (
+                <article key={transaction.id} className="annaseva-card overflow-hidden">
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <div className="flex min-h-16 min-w-16 flex-col items-center justify-center rounded-xl bg-accent px-2 text-center text-accent-foreground">
+                          <span className="text-2xl font-bold leading-none">
+                            {Number(transaction.distribution_date.slice(8, 10))}
+                          </span>
+                          <span className="mt-1 text-[11px]">
+                            {transaction.distribution_date.slice(0, 7)}
+                          </span>
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="font-bold text-foreground">{transaction.shop_name}</h3>
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            FPS ID: {transaction.shop_code}
+                          </p>
+                          {location && (
+                            <p className="mt-0.5 text-xs text-muted-foreground">{location}</p>
+                          )}
+                        </div>
+                      </div>
+                      <StatusChip status={transaction.status} />
+                    </div>
+                    <div className="mt-4 space-y-1 border-t border-border pt-3 text-sm">
+                      <p className="text-foreground">
+                        <span className="font-semibold">Scheme:</span>{" "}
+                        {transaction.scheme_name ?? `${transaction.card_category ?? "Ration"} card`}
+                      </p>
+                      <p className="text-foreground">
+                        <span className="font-semibold">Commodities:</span>{" "}
+                        {transaction.items.length
+                          ? transaction.items
+                              .map((item) => `${item.item_name} ${item.quantity} ${item.unit}`)
+                              .join(", ")
+                          : "Item details not recorded"}
+                      </p>
+                      <p className="text-foreground">
+                        <span className="font-semibold">Lifting member:</span>{" "}
+                        {transaction.lifting_member}
+                      </p>
+                      <p className="text-foreground">
+                        <span className="font-semibold">Transaction total:</span> Not recorded
+                      </p>
+                      <p className="flex items-center gap-1.5 pt-1 text-xs text-muted-foreground">
+                        <CalendarDays className="h-3.5 w-3.5" />
+                        {formatDistributionDate(transaction.distribution_date)}
+                        {transaction.booking_code ? ` · Booking ${transaction.booking_code}` : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="border-t border-border bg-muted/50 px-4 py-3 text-sm">
+                    <span className="font-semibold text-foreground">Sale receipt</span>
+                    <span className="ml-2 font-mono text-xs text-muted-foreground">
+                      {transaction.distribution_code}
+                    </span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <EmptyState
+            title={`No completed distributions for ${monthLabel}`}
+            hint="Completed ration collection receipts will appear here."
+          />
+        )}
+      </section>
+    </div>
+  );
+}
+
+type BeneficiaryComplaint = {
+  id: string;
+  category: string;
+  description: string;
+  status: string;
+  resolution_notes: string | null;
+  created_at: string;
+  shop_name: string | null;
+};
+
 function ProfileTab({ profile }: { profile: any }) {
   const queryClient = useQueryClient();
   const [category, setCategory] = useState("Stock not available");
   const [description, setDescription] = useState("");
   const [sent, setSent] = useState(false);
+  const [editingComplaintId, setEditingComplaintId] = useState<string | null>(null);
+  const [deleteConfirmationId, setDeleteConfirmationId] = useState<string | null>(null);
+  const cardCategory = profile.ration_cards?.card_category;
+  const schemeName = profile.ration_cards?.scheme_name;
+  const familyMembers = profile.ration_cards?.members ?? [];
+  const shopLocation = [
+    profile.fps_shops?.address,
+    profile.fps_shops?.taluka,
+    profile.fps_shops?.district,
+  ].filter(Boolean).join(", ") || "Not on file";
+
+  const { data: complaints, isLoading: complaintsLoading, isError: complaintsError } = useQuery({
+    queryKey: ["beneficiary-complaints", profile.id],
+    queryFn: () => apiGet<BeneficiaryComplaint[]>("/beneficiary/complaints"),
+  });
+  const refreshComplaints = () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["beneficiary-complaints", profile.id] }),
+      queryClient.invalidateQueries({ queryKey: ["complaints"] }),
+    ]);
 
   const complain = useMutation({
     mutationFn: async () => {
@@ -543,10 +1033,38 @@ function ProfileTab({ profile }: { profile: any }) {
         description,
       });
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       setSent(true);
       setDescription("");
-      queryClient.invalidateQueries({ queryKey: ["complaints"] });
+      setEditingComplaintId(null);
+      await refreshComplaints();
+    },
+  });
+  const updateComplaint = useMutation({
+    mutationFn: ({ id, complaintCategory, complaintDescription }: {
+      id: string;
+      complaintCategory: string;
+      complaintDescription: string;
+    }) => apiPatch(`/beneficiary/complaints/${id}`, {
+      category: complaintCategory,
+      description: complaintDescription,
+    }),
+    onSuccess: async () => {
+      setSent(false);
+      setEditingComplaintId(null);
+      setDescription("");
+      await refreshComplaints();
+    },
+  });
+  const deleteComplaint = useMutation({
+    mutationFn: (id: string) => apiDelete(`/beneficiary/complaints/${id}`),
+    onSuccess: async () => {
+      setDeleteConfirmationId(null);
+      if (editingComplaintId === deleteConfirmationId) {
+        setEditingComplaintId(null);
+        setDescription("");
+      }
+      await refreshComplaints();
     },
   });
 
@@ -555,18 +1073,144 @@ function ProfileTab({ profile }: { profile: any }) {
       <div className="annaseva-card p-5">
         <h2 className="font-bold text-foreground">Ration card</h2>
         <dl className="mt-3 space-y-2 text-sm">
-          <div className="flex justify-between"><dt className="text-muted-foreground">Card number</dt><dd className="font-semibold text-foreground">{profile.ration_cards?.masked_card_number}</dd></div>
-          <div className="flex justify-between"><dt className="text-muted-foreground">Category</dt><dd className="font-semibold text-foreground">{profile.ration_cards?.card_category}</dd></div>
-          <div className="flex justify-between"><dt className="text-muted-foreground">Verification</dt><dd><StatusChip status={profile.ration_cards?.verification_status ?? "pending"} /></dd></div>
-          <div className="flex justify-between"><dt className="text-muted-foreground">Fair price shop</dt><dd className="font-semibold text-foreground">{profile.fps_shops?.shop_name}</dd></div>
-          <div className="flex justify-between"><dt className="text-muted-foreground">Shop hours</dt><dd className="font-semibold text-foreground">{profile.fps_shops?.operating_hours}</dd></div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-muted-foreground">Card number</dt>
+            <dd className="text-right font-semibold text-foreground">
+              {profile.ration_cards?.masked_card_number ?? "Not on file"}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-muted-foreground">Card category</dt>
+            <dd className="text-right font-semibold text-foreground">
+              {cardCategory ?? "Not on file"}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-muted-foreground">Scheme</dt>
+            <dd className="text-right font-semibold text-foreground">
+              {schemeName ?? "Not assigned"}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="text-muted-foreground">Verification</dt>
+            <dd>
+              <StatusChip status={profile.ration_cards?.verification_status ?? "pending"} />
+            </dd>
+          </div>
         </dl>
       </div>
       <div className="annaseva-card p-5">
-        <h2 className="font-bold text-foreground">File a complaint</h2>
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-primary" />
+          <h2 className="font-bold text-foreground">Family members</h2>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {familyMembers.length} of {profile.family_size}
+          </span>
+        </div>
+        {familyMembers.length ? (
+          <ul className="mt-3 divide-y divide-border">
+            {familyMembers.map(
+              (member: { id: string; full_name: string; relationship: string | null }) => (
+                <li
+                  key={member.id}
+                  className="flex items-center justify-between gap-3 py-2 text-sm"
+                >
+                  <span className="font-medium text-foreground">{member.full_name}</span>
+                  {member.relationship && (
+                    <span className="text-right text-muted-foreground">{member.relationship}</span>
+                  )}
+                </li>
+              ),
+            )}
+          </ul>
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">
+            Family member names are not available in the linked ration-card records yet.
+          </p>
+        )}
+      </div>
+      <div className="annaseva-card p-5">
+        <h2 className="font-bold text-foreground">Aadhaar details on file</h2>
+        <dl className="mt-3 space-y-3 text-sm">
+          <div className="flex items-start gap-3">
+            <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div>
+              <dt className="text-muted-foreground">Aadhaar address</dt>
+              <dd className="mt-0.5 font-medium text-foreground">
+                {profile.aadhaar_address ?? "Not on file"}
+              </dd>
+            </div>
+          </div>
+          <div className="flex items-start gap-3">
+            <Phone className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div>
+              <dt className="text-muted-foreground">Mobile linked to Aadhaar</dt>
+              <dd className="mt-0.5 font-medium text-foreground">
+                {profile.aadhaar_linked_mobile ?? "Not on file"}
+              </dd>
+            </div>
+          </div>
+        </dl>
+      </div>
+      <div className="annaseva-card p-5">
+        <h2 className="font-bold text-foreground">Fair price shop</h2>
+        {profile.fps_shops ? (
+          <dl className="mt-3 space-y-3 text-sm">
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Shop</dt>
+              <dd className="text-right font-semibold text-foreground">
+                {profile.fps_shops.shop_name}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Shop code</dt>
+              <dd className="text-right font-semibold text-foreground">
+                {profile.fps_shops.shop_code}
+              </dd>
+            </div>
+            <div className="flex items-start gap-3">
+              <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <div>
+                <dt className="text-muted-foreground">Location</dt>
+                <dd className="mt-0.5 font-medium text-foreground">{shopLocation}</dd>
+              </div>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Contact number</dt>
+              <dd className="text-right font-semibold text-foreground">
+                {profile.fps_shops.contact_number ?? "Not on file"}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Shop hours</dt>
+              <dd className="text-right font-semibold text-foreground">
+                {profile.fps_shops.operating_hours ?? "Not on file"}
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <p className="mt-3 text-sm text-muted-foreground">
+            No fair price shop is assigned to this profile.
+          </p>
+        )}
+      </div>
+      <div className="annaseva-card p-5">
+        <h2 className="font-bold text-foreground">
+          {editingComplaintId ? "Edit your complaint" : "File a complaint"}
+        </h2>
         <div className="mt-3 space-y-3">
-          <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm">
-            {["Stock not available", "Quality issue", "Quantity short", "Behaviour issue", "Other"].map((c) => (
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
+          >
+            {[
+              "Stock not available",
+              "Quality issue",
+              "Quantity short",
+              "Behaviour issue",
+              "Other",
+            ].map((c) => (
               <option key={c}>{c}</option>
             ))}
           </select>
@@ -577,16 +1221,171 @@ function ProfileTab({ profile }: { profile: any }) {
             rows={3}
             className="w-full rounded-lg border border-input bg-background px-3 py-2.5 text-sm"
           />
-          {sent && <p className="rounded-lg bg-secondary/10 px-3 py-2 text-sm text-secondary">Complaint submitted. The admin team will review it.</p>}
+          {sent && (
+            <p className="rounded-lg bg-secondary/10 px-3 py-2 text-sm text-secondary">
+              Complaint submitted. The admin team will review it.
+            </p>
+          )}
+          {complain.isError && (
+            <p
+              role="alert"
+              className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              {complain.error.message}
+            </p>
+          )}
+          {updateComplaint.isError && (
+            <p
+              role="alert"
+              className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              {updateComplaint.error.message}
+            </p>
+          )}
           <button
-            onClick={() => complain.mutate()}
-            disabled={complain.isPending || description.trim().length < 5}
+            onClick={() => {
+              setSent(false);
+              if (editingComplaintId) {
+                updateComplaint.mutate({
+                  id: editingComplaintId,
+                  complaintCategory: category,
+                  complaintDescription: description,
+                });
+              } else {
+                complain.mutate();
+              }
+            }}
+            disabled={
+              complain.isPending || updateComplaint.isPending || description.trim().length < 5
+            }
             className="w-full rounded-lg bg-primary py-2.5 text-sm font-bold text-primary-foreground disabled:opacity-50"
           >
-            {complain.isPending ? "Submitting…" : "Submit complaint"}
+            {complain.isPending
+              ? "Submitting…"
+              : updateComplaint.isPending
+                ? "Updating…"
+                : editingComplaintId
+                  ? "Update complaint"
+                  : "Submit complaint"}
           </button>
+          {editingComplaintId && (
+            <button
+              type="button"
+              onClick={() => {
+                setEditingComplaintId(null);
+                setDescription("");
+              }}
+              className="w-full rounded-lg border border-input py-2.5 text-sm font-semibold text-foreground"
+            >
+              Cancel edit
+            </button>
+          )}
         </div>
       </div>
+      <section className="annaseva-card p-5">
+        <h2 className="font-bold text-foreground">Your feedback & complaints</h2>
+        {complaintsLoading ? (
+          <LoadingBlock label="Loading your complaints…" />
+        ) : complaintsError ? (
+          <p
+            role="alert"
+            className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            Could not load your complaints. Please refresh and try again.
+          </p>
+        ) : !complaints?.length ? (
+          <p className="mt-3 text-sm text-muted-foreground">
+            Your submitted complaints will appear here.
+          </p>
+        ) : (
+          <div className="mt-3 space-y-3">
+            {complaints.map((complaint) => (
+              <article key={complaint.id} className="rounded-xl border border-border p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <h3 className="font-semibold text-foreground">{complaint.category}</h3>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {complaint.shop_name ?? "General"} ·{" "}
+                      {new Date(complaint.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <StatusChip status={complaint.status} />
+                </div>
+                <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">
+                  {complaint.description}
+                </p>
+                {complaint.resolution_notes && (
+                  <div className="mt-2 rounded-lg bg-muted p-2 text-sm text-muted-foreground">
+                    <span className="font-semibold text-foreground">Shop response: </span>
+                    {complaint.resolution_notes}
+                  </div>
+                )}
+                {complaint.status === "open" ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingComplaintId(complaint.id);
+                        setCategory(complaint.category);
+                        setDescription(complaint.description);
+                        setSent(false);
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-primary px-3 py-2 text-xs font-semibold text-primary"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteConfirmationId(complaint.id)}
+                      disabled={deleteComplaint.isPending}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-2 text-xs font-semibold text-destructive disabled:opacity-50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
+                    </button>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    This complaint is being reviewed and can no longer be edited or deleted.
+                  </p>
+                )}
+                {deleteConfirmationId === complaint.id && (
+                  <div className="mt-3 rounded-lg bg-destructive/10 p-3">
+                    <p className="text-sm font-medium text-destructive">
+                      Delete this complaint? This cannot be undone.
+                    </p>
+                    {deleteComplaint.isError && (
+                      <p role="alert" className="mt-2 text-xs text-destructive">
+                        {deleteComplaint.error.message}
+                      </p>
+                    )}
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => deleteComplaint.mutate(complaint.id)}
+                        disabled={deleteComplaint.isPending}
+                        className="rounded-lg bg-destructive px-3 py-2 text-xs font-bold text-destructive-foreground disabled:opacity-50"
+                      >
+                        {deleteComplaint.isPending ? "Deleting…" : "Confirm delete"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteConfirmationId(null)}
+                        disabled={deleteComplaint.isPending}
+                        className="rounded-lg border border-input px-3 py-2 text-xs font-semibold text-foreground"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
     </>
   );
 }

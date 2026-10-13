@@ -1,3 +1,7 @@
+-- Complete fresh-install schema and synthetic demo data for AnnaSeva.
+-- Do not use this seed script to upgrade an existing database: demo stock
+-- values are upserted below. Existing installations should use the upgrade
+-- scripts documented in README.md instead.
 CREATE DATABASE IF NOT EXISTS annaseva
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
@@ -35,7 +39,11 @@ CREATE TABLE IF NOT EXISTS profiles (
   id CHAR(36) NOT NULL PRIMARY KEY,
   full_name VARCHAR(255) NOT NULL,
   mobile_number VARCHAR(32) NULL,
+  ration_card_number VARCHAR(64) NULL,
+  aadhaar_address VARCHAR(1000) NULL,
+  aadhaar_linked_mobile VARCHAR(32) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_profiles_ration_card_number (ration_card_number),
   CONSTRAINT fk_profiles_user FOREIGN KEY (id)
     REFERENCES app_users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
@@ -78,6 +86,7 @@ CREATE TABLE IF NOT EXISTS fps_shops (
   address VARCHAR(500) NOT NULL,
   district VARCHAR(120) NOT NULL,
   taluka VARCHAR(120) NOT NULL,
+  contact_number VARCHAR(32) NULL,
   operating_hours VARCHAR(255) NOT NULL DEFAULT '9:00 AM - 6:00 PM',
   status VARCHAR(32) NOT NULL DEFAULT 'active',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -119,8 +128,16 @@ CREATE TABLE IF NOT EXISTS ration_cards (
     REFERENCES app_users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
-ALTER TABLE ration_cards
-  MODIFY verification_status VARCHAR(32) NOT NULL DEFAULT 'pending';
+CREATE TABLE IF NOT EXISTS ration_card_members (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  ration_card_id CHAR(36) NOT NULL,
+  full_name VARCHAR(255) NOT NULL,
+  relationship VARCHAR(64) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY ix_ration_card_members_card (ration_card_id),
+  CONSTRAINT fk_ration_card_members_card FOREIGN KEY (ration_card_id)
+    REFERENCES ration_cards(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS beneficiary_profiles (
   id CHAR(36) NOT NULL PRIMARY KEY,

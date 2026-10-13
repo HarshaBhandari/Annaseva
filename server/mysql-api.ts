@@ -115,6 +115,12 @@ app.post("/api/auth/signup", asyncRoute(async (request, response) => {
   if (password.length < 6) return sendError(response, 400, "Password must be at least 6 characters.");
   if (!["beneficiary", "shopkeeper", "admin"].includes(role)) return sendError(response, 400, "Choose a valid account type.");
   if (role === "admin") return sendError(response, 403, "Admin accounts must be created by an administrator in MySQL.");
+  const rationCardNumber = role === "beneficiary"
+    ? requiredString(request.body.rationCardNumber, "Ration card number", 64).replace(/[\s-]/g, "").toUpperCase()
+    : null;
+  if (rationCardNumber && !/^[A-Z0-9/]{5,64}$/.test(rationCardNumber)) {
+    return sendError(response, 400, "Enter a valid ration card number.");
+  }
 
   const salt = randomBytes(16);
   const passwordHash = `${salt.toString("hex")}:${(await scrypt(password, salt, 64) as Buffer).toString("hex")}`;
@@ -123,7 +129,10 @@ app.post("/api/auth/signup", asyncRoute(async (request, response) => {
   try {
     await connection.beginTransaction();
     await connection.execute("INSERT INTO app_users (id, email, password_hash) VALUES (?, ?, ?)", [userId, email, passwordHash]);
-    await connection.execute("INSERT INTO profiles (id, full_name, mobile_number) VALUES (?, ?, ?)", [userId, fullName, mobile]);
+    await connection.execute(
+      "INSERT INTO profiles (id, full_name, mobile_number, ration_card_number) VALUES (?, ?, ?, ?)",
+      [userId, fullName, mobile, rationCardNumber],
+    );
     await connection.execute("INSERT INTO user_roles (id, user_id, role) VALUES (?, ?, ?)", [randomUUID(), userId, role]);
     const token = randomBytes(32).toString("base64url");
     const tokenHash = createHash("sha256").update(token).digest("hex");
@@ -133,7 +142,9 @@ app.post("/api/auth/signup", asyncRoute(async (request, response) => {
     response.status(201).json({ user: { id: userId, email, full_name: fullName, role } });
   } catch (error) {
     await connection.rollback();
-    if ((error as { code?: string }).code === "ER_DUP_ENTRY") return sendError(response, 409, "An account with this email already exists.");
+    if ((error as { code?: string; message?: string }).code === "ER_DUP_ENTRY") {
+      return sendError(response, 409, "An account with this email already exists.");
+    }
     throw error;
   } finally {
     connection.release();
@@ -238,10 +249,12 @@ app.get("/api/shops", requireUser(), asyncRoute(async (_request, response) => {
 
 app.get("/api/beneficiary/verification", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
   const [rows] = await pool.execute<mysql.RowDataPacket[]>(
-    "SELECT phone_verified_at, aadhaar_last4, identity_status, submitted_at, reviewed_at, review_note FROM user_verifications WHERE user_id = ?",
+    `SELECT phone_verified_at, aadhaar_last4, identity_status, submitted_at, reviewed_at, review_note,
+            (phone_verified_at >= DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')) AS phone_verified_this_month
+     FROM user_verifications WHERE user_id = ?`,
     [current(request).id],
   );
-  response.json(rows[0] ?? { phone_verified_at: null, aadhaar_last4: null, identity_status: "not_submitted", submitted_at: null, reviewed_at: null, review_note: null });
+  response.json(rows[0] ?? { phone_verified_at: null, phone_verified_this_month: false, aadhaar_last4: null, identity_status: "not_submitted", submitted_at: null, reviewed_at: null, review_note: null });
 }));
 
 app.post("/api/beneficiary/verification/otp/send", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
@@ -304,10 +317,13 @@ app.post("/api/beneficiary/verification/submit", requireUser(["beneficiary"]), a
 app.get("/api/beneficiary/profile", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
   const user = current(request);
   const [rows] = await pool.execute<mysql.RowDataPacket[]>(
-    `SELECT bp.*, rc.id AS card_id, rc.masked_card_number, rc.card_category, rc.aadhaar_last4, rc.verification_status,
+    `SELECT bp.*, p.aadhaar_address, p.aadhaar_linked_mobile,
+       rc.id AS card_id, rc.masked_card_number, rc.card_category, rc.aadhaar_last4, rc.verification_status,
        uv.phone_verified_at, uv.identity_status,
-       fs.id AS shop_id, fs.shop_name, fs.shop_code, fs.district, fs.operating_hours
+       fs.id AS shop_id, fs.shop_name, fs.shop_code, fs.address AS shop_address, fs.district, fs.taluka,
+       fs.contact_number AS shop_contact_number, fs.operating_hours
      FROM beneficiary_profiles bp
+     JOIN profiles p ON p.id = bp.user_id
      LEFT JOIN ration_cards rc ON rc.id = bp.ration_card_id
      LEFT JOIN user_verifications uv ON uv.user_id = bp.user_id
      LEFT JOIN fps_shops fs ON fs.id = bp.fps_id WHERE bp.user_id = ? LIMIT 1`,
@@ -315,11 +331,38 @@ app.get("/api/beneficiary/profile", requireUser(["beneficiary"]), asyncRoute(asy
   );
   const row = rows[0];
   if (!row) return response.json(null);
+  let members: mysql.RowDataPacket[] = [];
+  if (row.card_id) {
+    const [memberRows] = await pool.execute<mysql.RowDataPacket[]>(
+      "SELECT id, full_name, relationship FROM ration_card_members WHERE ration_card_id = ? ORDER BY full_name",
+      [row.card_id],
+    );
+    members = memberRows;
+  }
   response.json({
     id: row.id, user_id: row.user_id, ration_card_id: row.ration_card_id, fps_id: row.fps_id, family_size: row.family_size,
+    aadhaar_address: row.aadhaar_address,
+    aadhaar_linked_mobile: row.aadhaar_linked_mobile,
     verification: { phone_verified_at: row.phone_verified_at, identity_status: row.identity_status ?? "not_submitted" },
-    ration_cards: row.card_id ? { id: row.card_id, masked_card_number: row.masked_card_number, card_category: row.card_category, aadhaar_last4: row.aadhaar_last4, verification_status: row.identity_status ?? row.verification_status } : null,
-    fps_shops: row.shop_id ? { id: row.shop_id, shop_name: row.shop_name, shop_code: row.shop_code, district: row.district, operating_hours: row.operating_hours } : null,
+    ration_cards: row.card_id ? {
+      id: row.card_id,
+      masked_card_number: row.masked_card_number,
+      card_category: row.card_category,
+      scheme_name: row.card_category === "Yellow" ? "AAY" : row.card_category === "Orange" ? "PHH" : null,
+      aadhaar_last4: row.aadhaar_last4,
+      verification_status: row.identity_status ?? row.verification_status,
+      members,
+    } : null,
+    fps_shops: row.shop_id ? {
+      id: row.shop_id,
+      shop_name: row.shop_name,
+      shop_code: row.shop_code,
+      address: row.shop_address,
+      district: row.district,
+      taluka: row.taluka,
+      contact_number: row.shop_contact_number,
+      operating_hours: row.operating_hours,
+    } : null,
   });
 }));
 
@@ -361,6 +404,60 @@ app.get("/api/beneficiary/entitlements", requireUser(["beneficiary"]), asyncRout
   response.json(rows);
 }));
 
+app.get("/api/beneficiary/scheme-transactions", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
+  const month = requiredString(request.query.month, "Month", 7);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+    return sendError(response, 400, "Choose a valid transaction month.");
+  }
+  const [profiles] = await pool.execute<mysql.RowDataPacket[]>(
+    `SELECT bp.id, p.ration_card_number
+     FROM beneficiary_profiles bp JOIN profiles p ON p.id = bp.user_id
+     WHERE bp.user_id = ? LIMIT 1`,
+    [current(request).id],
+  );
+  if (!profiles.length) return sendError(response, 404, "Set up your ration profile first.");
+  const profile = profiles[0];
+  const [year, monthNumber] = month.split("-").map(Number);
+  const startDate = `${month}-01`;
+  const nextMonth = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
+  const householdNumber = profile.ration_card_number as string | null;
+  const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+    `SELECT dr.id, dr.distribution_code, dr.distribution_date, dr.status,
+       fs.shop_name, fs.shop_code, fs.address AS shop_address, fs.district, fs.taluka,
+       rc.card_category, b.booking_code, p.full_name AS lifting_member
+     FROM distribution_records dr
+     JOIN beneficiary_profiles bp ON bp.id = dr.beneficiary_id
+     JOIN profiles p ON p.id = bp.user_id
+     LEFT JOIN ration_cards rc ON rc.id = bp.ration_card_id
+     JOIN fps_shops fs ON fs.id = dr.fps_id
+     LEFT JOIN bookings b ON b.id = dr.booking_id
+     WHERE dr.distribution_date >= ? AND dr.distribution_date < ?
+       AND ((? IS NOT NULL AND p.ration_card_number = ?) OR (? IS NULL AND bp.user_id = ?))
+     ORDER BY dr.distribution_date DESC, dr.created_at DESC`,
+    [startDate, nextMonth, householdNumber, householdNumber, householdNumber, current(request).id],
+  );
+  if (!rows.length) return response.json([]);
+  const distributionIds = rows.map((row) => row.id as string);
+  const placeholders = distributionIds.map(() => "?").join(",");
+  const [items] = await pool.execute<mysql.RowDataPacket[]>(
+    `SELECT di.distribution_id, di.quantity_distributed, di.unit, ri.item_name
+     FROM distribution_items di JOIN ration_items ri ON ri.id = di.item_id
+     WHERE di.distribution_id IN (${placeholders}) ORDER BY ri.item_name`,
+    distributionIds,
+  );
+  response.json(rows.map((row) => ({
+    ...row,
+    scheme_name: row.card_category === "Yellow" ? "AAY" : row.card_category === "Orange" ? "PHH" : null,
+    items: items
+      .filter((item) => item.distribution_id === row.id)
+      .map((item) => ({
+        item_name: item.item_name,
+        quantity: Number(item.quantity_distributed),
+        unit: item.unit,
+      })),
+  })));
+}));
+
 app.get("/api/beneficiary/stock", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
   const user = current(request);
   const [rows] = await pool.execute<mysql.RowDataPacket[]>(
@@ -375,9 +472,16 @@ app.get("/api/beneficiary/stock", requireUser(["beneficiary"]), asyncRoute(async
 
 app.get("/api/beneficiary/bookings", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
   const user = current(request);
+  const [profiles] = await pool.execute<mysql.RowDataPacket[]>(
+    "SELECT ration_card_number FROM profiles WHERE id = ?", [user.id],
+  );
+  const rationCardNumber = profiles[0]?.ration_card_number as string | null | undefined;
   const [rows] = await pool.execute<mysql.RowDataPacket[]>(
     `SELECT b.* FROM bookings b JOIN beneficiary_profiles bp ON bp.id = b.beneficiary_id
-     WHERE bp.user_id = ? ORDER BY b.created_at DESC`, [user.id],
+     JOIN profiles p ON p.id = bp.user_id
+     WHERE ${rationCardNumber ? "p.ration_card_number = ?" : "bp.user_id = ?"}
+     ORDER BY b.created_at DESC`,
+    [rationCardNumber ?? user.id],
   );
   response.json(await attachBookingItems(rows));
 }));
@@ -399,21 +503,70 @@ app.post("/api/beneficiary/bookings", requireUser(["beneficiary"]), asyncRoute(a
   const user = current(request);
   const collectionDate = requiredString(request.body.collectionDate, "Collection date", 10);
   const slot = requiredString(request.body.slot, "Collection time slot", 64);
-  const [verificationRows] = await pool.execute<mysql.RowDataPacket[]>(
-    "SELECT phone_verified_at FROM user_verifications WHERE user_id = ?", [user.id],
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(collectionDate)) {
+    return sendError(response, 400, "Choose a valid collection date.");
+  }
+  const dateParts = collectionDate.split("-").map(Number);
+  const parsedDate = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]));
+  if (
+    parsedDate.getUTCFullYear() !== dateParts[0] ||
+    parsedDate.getUTCMonth() !== dateParts[1] - 1 ||
+    parsedDate.getUTCDate() !== dateParts[2]
+  ) {
+    return sendError(response, 400, "Choose a valid collection date.");
+  }
+  const [dateRange] = await pool.execute<mysql.RowDataPacket[]>(
+    "SELECT ? BETWEEN DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY) AND LAST_DAY(CURRENT_DATE) AS allowed",
+    [collectionDate],
   );
-  if (!verificationRows[0]?.phone_verified_at) {
-    return sendError(response, 403, "Verify your mobile number before booking.");
+  if (!Number(dateRange[0]?.allowed)) {
+    return sendError(response, 400, "Choose a collection date between tomorrow and the end of this month.");
+  }
+  const [verificationRows] = await pool.execute<mysql.RowDataPacket[]>(
+    `SELECT phone_verified_at, identity_status,
+            (phone_verified_at >= DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')) AS phone_verified_this_month
+     FROM user_verifications WHERE user_id = ?`, [user.id],
+  );
+  if (!Number(verificationRows[0]?.phone_verified_this_month)) {
+    return sendError(response, 403, "Verify your mobile number by OTP this month before booking.");
+  }
+  if (verificationRows[0].identity_status !== "verified") {
+    return sendError(response, 403, "Submit your Aadhaar last four digits and wait for admin approval before booking.");
   }
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
     const [profiles] = await connection.execute<mysql.RowDataPacket[]>(
-      `SELECT bp.id, bp.fps_id, bp.family_size, rc.card_category FROM beneficiary_profiles bp
-       JOIN ration_cards rc ON rc.id = bp.ration_card_id WHERE bp.user_id = ? FOR UPDATE`, [user.id],
+      `SELECT bp.id, bp.fps_id, bp.family_size, rc.card_category, p.ration_card_number FROM beneficiary_profiles bp
+       JOIN ration_cards rc ON rc.id = bp.ration_card_id
+       JOIN profiles p ON p.id = bp.user_id WHERE bp.user_id = ?`, [user.id],
     );
     const profile = profiles[0];
     if (!profile) throw new Error("Set up your ration profile before booking.");
+    if (profile.ration_card_number) {
+      await connection.execute<mysql.RowDataPacket[]>(
+        "SELECT id FROM profiles WHERE ration_card_number = ? ORDER BY id FOR UPDATE", [profile.ration_card_number],
+      );
+    } else {
+      await connection.execute<mysql.RowDataPacket[]>(
+        "SELECT id FROM profiles WHERE id = ? FOR UPDATE", [user.id],
+      );
+    }
+    const [existingBookings] = await connection.execute<mysql.RowDataPacket[]>(
+      `SELECT b.id FROM bookings b
+       JOIN beneficiary_profiles bp ON bp.id = b.beneficiary_id
+       JOIN profiles p ON p.id = bp.user_id
+       WHERE ${profile.ration_card_number ? "p.ration_card_number = ?" : "bp.user_id = ?"}
+         AND b.collection_date >= DATE_FORMAT(?, '%Y-%m-01')
+         AND b.collection_date < DATE_ADD(LAST_DAY(?), INTERVAL 1 DAY)
+         AND b.status NOT IN ('rejected', 'cancelled')
+       LIMIT 1 FOR UPDATE`,
+      [profile.ration_card_number ?? user.id, collectionDate, collectionDate],
+    );
+    if (existingBookings.length) {
+      await connection.rollback();
+      return sendError(response, 409, "Your family has already booked ration for this month.");
+    }
     const [shopRows] = await connection.execute<mysql.RowDataPacket[]>("SELECT status FROM fps_shops WHERE id = ?", [profile.fps_id]);
     if (shopRows[0]?.status !== "active") throw new Error("Your fair price shop is currently closed.");
     const bookingId = randomUUID();
@@ -443,6 +596,113 @@ app.post("/api/beneficiary/bookings", requireUser(["beneficiary"]), asyncRoute(a
   }
 }));
 
+app.patch("/api/beneficiary/bookings/:id/date", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
+  const user = current(request);
+  const collectionDate = requiredString(request.body.collectionDate, "Collection date", 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(collectionDate)) {
+    return sendError(response, 400, "Choose a valid collection date.");
+  }
+  const dateParts = collectionDate.split("-").map(Number);
+  const parsedDate = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]));
+  if (
+    parsedDate.getUTCFullYear() !== dateParts[0] ||
+    parsedDate.getUTCMonth() !== dateParts[1] - 1 ||
+    parsedDate.getUTCDate() !== dateParts[2]
+  ) {
+    return sendError(response, 400, "Choose a valid collection date.");
+  }
+  const [dateRange] = await pool.execute<mysql.RowDataPacket[]>(
+    "SELECT ? BETWEEN DATE_ADD(CURRENT_DATE, INTERVAL 1 DAY) AND LAST_DAY(CURRENT_DATE) AS allowed",
+    [collectionDate],
+  );
+  if (!Number(dateRange[0]?.allowed)) {
+    return sendError(response, 400, "Choose a collection date between tomorrow and the end of this month.");
+  }
+  const [verificationRows] = await pool.execute<mysql.RowDataPacket[]>(
+    `SELECT phone_verified_at, identity_status,
+            (phone_verified_at >= DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')) AS phone_verified_this_month
+     FROM user_verifications WHERE user_id = ?`, [user.id],
+  );
+  if (!Number(verificationRows[0]?.phone_verified_this_month)) {
+    return sendError(response, 403, "Verify your mobile number by OTP this month before changing a booking date.");
+  }
+  if (verificationRows[0].identity_status !== "verified") {
+    return sendError(response, 403, "Your identity must be approved before changing a booking date.");
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [profiles] = await connection.execute<mysql.RowDataPacket[]>(
+      "SELECT ration_card_number FROM profiles WHERE id = ?", [user.id],
+    );
+    if (profiles[0]?.ration_card_number) {
+      await connection.execute<mysql.RowDataPacket[]>(
+        "SELECT id FROM profiles WHERE ration_card_number = ? ORDER BY id FOR UPDATE", [profiles[0].ration_card_number],
+      );
+    } else {
+      await connection.execute<mysql.RowDataPacket[]>(
+        "SELECT id FROM profiles WHERE id = ? FOR UPDATE", [user.id],
+      );
+    }
+    const [bookings] = await connection.execute<mysql.RowDataPacket[]>(
+      `SELECT b.id, b.status, b.collection_date, b.fps_id, b.booking_code, bp.user_id AS beneficiary_user_id
+       FROM bookings b JOIN beneficiary_profiles bp ON bp.id = b.beneficiary_id
+       JOIN profiles booking_profile ON booking_profile.id = bp.user_id
+       WHERE b.id = ?
+         AND ${profiles[0]?.ration_card_number ? "booking_profile.ration_card_number = ?" : "bp.user_id = ?"}
+       FOR UPDATE`,
+      [request.params.id, profiles[0]?.ration_card_number ?? user.id],
+    );
+    const booking = bookings[0];
+    if (!booking) {
+      await connection.rollback();
+      return sendError(response, 404, "Booking not found.");
+    }
+    if (!["pending", "approved"].includes(booking.status)) {
+      await connection.rollback();
+      return sendError(response, 409, "Only pending or approved bookings can have their date changed.");
+    }
+    const [distributions] = await connection.execute<mysql.RowDataPacket[]>(
+      "SELECT id FROM distribution_records WHERE booking_id = ? LIMIT 1", [booking.id],
+    );
+    if (distributions.length) {
+      await connection.rollback();
+      return sendError(response, 409, "A booking that has already been collected cannot be changed.");
+    }
+    await connection.execute(
+      "UPDATE bookings SET collection_date = ?, status = 'pending', rejection_reason = NULL WHERE id = ?",
+      [collectionDate, booking.id],
+    );
+    await connection.commit();
+    const [shopkeepers] = await pool.execute<mysql.RowDataPacket[]>(
+      "SELECT user_id FROM shopkeepers WHERE fps_id = ?", [booking.fps_id],
+    );
+    for (const shopkeeper of shopkeepers) {
+      await notifyUser(
+        shopkeeper.user_id,
+        "Booking date changed",
+        `Booking ${booking.booking_code} was rescheduled from ${booking.collection_date} to ${collectionDate}. Review and approve or reject the new date.`,
+        "booking",
+      );
+    }
+    if (booking.beneficiary_user_id !== user.id) {
+      await notifyUser(
+        booking.beneficiary_user_id,
+        "Booking date changed",
+        `A family member changed booking ${booking.booking_code} from ${booking.collection_date} to ${collectionDate}. It is waiting for shopkeeper approval.`,
+        "booking",
+      );
+    }
+    response.json({ id: booking.id, collection_date: collectionDate, status: "pending" });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}));
+
 app.get("/api/beneficiary/notifications", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
   const [rows] = await pool.execute("SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC", [current(request).id]);
   response.json(rows);
@@ -453,11 +713,58 @@ app.patch("/api/beneficiary/notifications/:id/read", requireUser(["beneficiary"]
 }));
 app.post("/api/beneficiary/complaints", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
   const user = current(request);
+  const category = requiredString(request.body.category, "Category", 120);
+  const description = requiredString(request.body.description, "Description", 5000);
+  if (description.length < 5) return sendError(response, 400, "Describe the issue in at least 5 characters.");
   const [rows] = await pool.execute<mysql.RowDataPacket[]>("SELECT id, fps_id FROM beneficiary_profiles WHERE user_id = ?", [user.id]);
   if (!rows.length) return sendError(response, 400, "Set up your ration profile first.");
   const complaintId = randomUUID();
-  await pool.execute("INSERT INTO complaints (id, beneficiary_id, fps_id, category, description) VALUES (?, ?, ?, ?, ?)", [complaintId, rows[0].id, rows[0].fps_id, requiredString(request.body.category, "Category", 120), requiredString(request.body.description, "Description", 5000)]);
+  await pool.execute("INSERT INTO complaints (id, beneficiary_id, fps_id, category, description) VALUES (?, ?, ?, ?, ?)", [complaintId, rows[0].id, rows[0].fps_id, category, description]);
   response.status(201).json({ id: complaintId });
+}));
+app.get("/api/beneficiary/complaints", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
+  const [rows] = await pool.execute<mysql.RowDataPacket[]>(
+    `SELECT c.id, c.category, c.description, c.status, c.resolution_notes, c.created_at, c.updated_at,
+       fs.shop_name
+     FROM complaints c
+     JOIN beneficiary_profiles bp ON bp.id = c.beneficiary_id
+     LEFT JOIN fps_shops fs ON fs.id = c.fps_id
+     WHERE bp.user_id = ? ORDER BY c.created_at DESC LIMIT 100`,
+    [current(request).id],
+  );
+  response.json(rows);
+}));
+app.patch("/api/beneficiary/complaints/:id", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
+  const category = requiredString(request.body.category, "Category", 120);
+  const description = requiredString(request.body.description, "Description", 5000);
+  if (description.trim().length < 5) return sendError(response, 400, "Describe the issue in at least 5 characters.");
+  const [result] = await pool.execute<mysql.ResultSetHeader>(
+    `UPDATE complaints c
+     JOIN beneficiary_profiles bp ON bp.id = c.beneficiary_id
+     SET c.category = ?, c.description = ?
+     WHERE c.id = ? AND bp.user_id = ? AND c.status = 'open'`,
+    [category, description, request.params.id, current(request).id],
+  );
+  if (!result.affectedRows) {
+    const [unchanged] = await pool.execute<mysql.RowDataPacket[]>(
+      `SELECT c.id FROM complaints c
+       JOIN beneficiary_profiles bp ON bp.id = c.beneficiary_id
+       WHERE c.id = ? AND bp.user_id = ? AND c.status = 'open'`,
+      [request.params.id, current(request).id],
+    );
+    if (!unchanged.length) return sendError(response, 404, "Open complaint not found.");
+  }
+  response.json({ ok: true });
+}));
+app.delete("/api/beneficiary/complaints/:id", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
+  const [result] = await pool.execute<mysql.ResultSetHeader>(
+    `DELETE c FROM complaints c
+     JOIN beneficiary_profiles bp ON bp.id = c.beneficiary_id
+     WHERE c.id = ? AND bp.user_id = ? AND c.status = 'open'`,
+    [request.params.id, current(request).id],
+  );
+  if (!result.affectedRows) return sendError(response, 404, "Open complaint not found.");
+  response.json({ ok: true });
 }));
 
 app.get("/api/shopkeeper/profile", requireUser(["shopkeeper"]), asyncRoute(async (request, response) => {
@@ -479,8 +786,11 @@ app.get("/api/shopkeeper/dashboard", requireUser(["shopkeeper"]), asyncRoute(asy
   const fpsId = shops[0]?.fps_id;
   if (!fpsId) return response.json({ bookings: [], stock: [], distributions: [] });
   const [[bookings], [stock], [distributions]] = await Promise.all([
-    pool.execute<mysql.RowDataPacket[]>("SELECT id, status FROM bookings WHERE fps_id = ?", [fpsId]),
-    pool.execute<mysql.RowDataPacket[]>("SELECT closing_stock, minimum_threshold FROM fps_stock WHERE fps_id = ?", [fpsId]),
+    pool.execute<mysql.RowDataPacket[]>("SELECT id, status, booking_code, collection_date, collection_slot FROM bookings WHERE fps_id = ? ORDER BY created_at DESC", [fpsId]),
+    pool.execute<mysql.RowDataPacket[]>(
+      `SELECT st.closing_stock, st.minimum_threshold, ri.item_name, ri.unit
+       FROM fps_stock st JOIN ration_items ri ON ri.id = st.item_id WHERE st.fps_id = ? ORDER BY ri.item_name`, [fpsId],
+    ),
     pool.execute<mysql.RowDataPacket[]>("SELECT id, distribution_date FROM distribution_records WHERE fps_id = ?", [fpsId]),
   ]);
   response.json({ bookings, stock, distributions });
@@ -702,6 +1012,63 @@ app.get("/api/admin/overview", requireUser(["admin"]), asyncRoute(async (_reques
     pending_verifications: Number(verification[0].count), pending_refills: Number(refills[0].count),
     trend, alerts: alerts.slice(0, 8),
   });
+}));
+app.get("/api/admin/uncollected-entitlements", requireUser(["admin"]), asyncRoute(async (_request, response) => {
+  const [rows] = await pool.query<mysql.RowDataPacket[]>(
+    `WITH household_profiles AS (
+       SELECT p.id AS user_id,
+              p.full_name,
+              COALESCE(p.ration_card_number, CONCAT('legacy:', p.id)) AS household_id,
+              bp.id AS beneficiary_id,
+              bp.created_at AS profile_created_at,
+              rc.card_category,
+              fs.shop_name
+       FROM profiles p
+       JOIN beneficiary_profiles bp ON bp.user_id = p.id
+       LEFT JOIN ration_cards rc ON rc.id = bp.ration_card_id
+       LEFT JOIN fps_shops fs ON fs.id = bp.fps_id
+     ),
+     household_summary AS (
+       SELECT household_id,
+              SHA2(household_id, 256) AS household_key,
+              MIN(full_name) AS beneficiary_name,
+              COUNT(DISTINCT user_id) AS household_accounts,
+              GROUP_CONCAT(DISTINCT card_category ORDER BY card_category SEPARATOR ', ') AS card_categories,
+              GROUP_CONCAT(DISTINCT shop_name ORDER BY shop_name SEPARATOR ', ') AS shop_names,
+              MIN(profile_created_at) AS household_created_at
+       FROM household_profiles
+       GROUP BY household_id
+     ),
+     household_distributions AS (
+       SELECT hp.household_id,
+              MAX(dr.distribution_date) AS last_distribution_date
+       FROM household_profiles hp
+       JOIN distribution_records dr ON dr.beneficiary_id = hp.beneficiary_id
+       GROUP BY hp.household_id
+     ),
+     household_bookings AS (
+       SELECT hp.household_id,
+              MAX(b.booking_date) AS last_booking_date
+       FROM household_profiles hp
+       JOIN bookings b ON b.beneficiary_id = hp.beneficiary_id
+       WHERE b.booking_date >= DATE_SUB(CURRENT_DATE, INTERVAL 3 MONTH)
+       GROUP BY hp.household_id
+     )
+     SELECT hs.household_key,
+            hs.beneficiary_name,
+            hs.household_accounts,
+            hs.card_categories,
+            hs.shop_names,
+            hb.last_booking_date,
+            hd.last_distribution_date
+     FROM household_summary hs
+     LEFT JOIN household_distributions hd ON hd.household_id = hs.household_id
+     LEFT JOIN household_bookings hb ON hb.household_id = hs.household_id
+     WHERE hs.household_created_at <= DATE_SUB(CURRENT_DATE, INTERVAL 3 MONTH)
+       AND (hd.last_distribution_date IS NULL OR hd.last_distribution_date < DATE_SUB(CURRENT_DATE, INTERVAL 3 MONTH))
+     ORDER BY hd.last_distribution_date IS NOT NULL, hd.last_distribution_date, hs.beneficiary_name`,
+  );
+  response.json(rows);
 }));
 app.get("/api/admin/shops", requireUser(["admin"]), asyncRoute(async (_request, response) => {
   const [rows] = await pool.query("SELECT * FROM fps_shops ORDER BY shop_code");

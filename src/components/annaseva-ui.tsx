@@ -2,6 +2,25 @@ import type { LucideIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 
+const normalizeStatusKey = (value?: string) =>
+  (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const formatStatusLabel = (value?: string) => {
+  const normalized = normalizeStatusKey(value);
+  if (!normalized) return "Unknown";
+
+  return normalized
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+};
+
 export function StatCard({
   icon: Icon,
   label,
@@ -35,22 +54,35 @@ export function StatCard({
 export function StatusChip({ status }: { status: string }) {
   const styles: Record<string, string> = {
     pending: "bg-warning/30 text-warning-foreground",
+    awaiting: "bg-warning/30 text-warning-foreground",
     approved: "bg-secondary/15 text-secondary",
     completed: "bg-secondary/15 text-secondary",
-    rejected: "bg-destructive/10 text-destructive",
-    cancelled: "bg-muted text-muted-foreground",
-    open: "bg-warning/30 text-warning-foreground",
+    verified: "bg-secondary/15 text-secondary",
     resolved: "bg-secondary/15 text-secondary",
     active: "bg-secondary/15 text-secondary",
+    open: "bg-warning/30 text-warning-foreground",
+    in_progress: "bg-warning/30 text-warning-foreground",
+    under_review: "bg-warning/30 text-warning-foreground",
+    submitted: "bg-warning/30 text-warning-foreground",
+    rejected: "bg-destructive/10 text-destructive",
+    cancelled: "bg-muted text-muted-foreground",
+    closed: "bg-muted text-muted-foreground",
+    inactive: "bg-muted text-muted-foreground",
+    denied: "bg-destructive/10 text-destructive",
+    failed: "bg-destructive/10 text-destructive",
+    default: "bg-muted text-muted-foreground",
   };
+
+  const normalizedStatus = normalizeStatusKey(status);
+  const normalizedKey = normalizedStatus.replace(/\s+/g, "_");
+  const tone = styles[normalizedKey] ?? styles[normalizedStatus] ?? styles.default;
+
   return (
     <span
-      className={cn(
-        "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold capitalize",
-        styles[status] ?? "bg-muted text-muted-foreground",
-      )}
+      className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold", tone)}
+      title={status || "Unknown"}
     >
-      {status}
+      {formatStatusLabel(status)}
     </span>
   );
 }
@@ -117,13 +149,16 @@ export function RoleShell({
         </div>
         <h1 className="mt-3 text-xl font-bold">{title}</h1>
         {/* Desktop / tablet tab bar */}
-        <nav className="mt-3 hidden gap-1 overflow-x-auto md:flex">
+        <nav aria-label="Main navigation" className="mt-3 hidden gap-1 overflow-x-auto md:flex">
           {items.map((item) => (
             <button
               key={item.id}
+              type="button"
               onClick={() => onSelect(item.id)}
+              aria-pressed={active === item.id}
+              aria-current={active === item.id ? "page" : undefined}
               className={cn(
-                "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition",
+                "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition",
                 active === item.id
                   ? "bg-primary-foreground text-primary"
                   : "text-primary-foreground/80 hover:bg-primary-foreground/10",
@@ -139,13 +174,16 @@ export function RoleShell({
       <main className="flex-1 space-y-4 p-4">{children}</main>
 
       {/* Mobile bottom navigation */}
-      <nav className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-card md:hidden">
+      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-10 flex overflow-x-auto border-t border-border bg-card md:hidden">
         {items.map((item) => (
           <button
             key={item.id}
+            type="button"
             onClick={() => onSelect(item.id)}
+            aria-pressed={active === item.id}
+            aria-current={active === item.id ? "page" : undefined}
             className={cn(
-              "flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-medium transition",
+              "flex min-w-16 shrink-0 flex-1 flex-col items-center gap-0.5 px-1 py-2 text-[11px] font-medium transition",
               active === item.id ? "text-primary" : "text-muted-foreground",
             )}
           >
