@@ -35,12 +35,23 @@ For an existing database created from an older version, apply the relevant upgra
 "C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p < "mysql\upgrade_beneficiary_profile_details.sql"
 ```
 
+If the beneficiary stock endpoint has already been updated to use `selected_fps_id`, also apply `upgrade_selected_fps_shop.sql` once to add that column where missing and synchronize existing FPS assignments. Fresh databases created from `annaseva.mysql.sql` already include it.
+
 Copy the MySQL template to `.env` and set `MYSQL_PASSWORD` to your local MySQL password. Keep `.env` private; it is excluded from Git.
 
 ```cmd
 copy .env.example .env
 notepad .env
 ```
+
+To load the included demo accounts into a demo database, run these commands from the project root after the database schema and `.env` are ready:
+
+```cmd
+node mysql\seed-shopkeepers.cjs
+node mysql\assign-demo-beneficiary-shops.cjs
+```
+
+The shopkeeper import loads the ten FPS shops and creates stock rows for active ration items where rows are missing. The assignment script links Ravi Shinde, Pooja Patil, Amit Jadhav, Sneha More, and Kiran Ahire to FPS-1001 through FPS-1005, respectively, and adds any missing stock rows for those five shops. It does not reset beneficiary passwords or overwrite existing stock quantities. The quantities inserted for missing stock rows are synthetic demo quantities (500 opening, 200 received, 650 closing, reserve 100); replace them with verified inventory before real use. These scripts are for demo data only; the shopkeeper import resets passwords for its seeded accounts and rewrites the local shopkeeper credential CSV, so do not run it against production data or commit credential CSVs.
 
 Start both the API and web app:
 

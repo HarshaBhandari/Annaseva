@@ -116,7 +116,7 @@ function BeneficiaryPage() {
   return (
     <RoleShell
       title={`Namaste, ${profile.ration_cards?.card_category ?? ""} card holder`}
-      subtitle={`${profile.fps_shops?.shop_name ?? "No shop assigned"} · Family of ${profile.family_size}`}
+      subtitle={`${profile.fps_shops ? `${profile.fps_shops.shop_code} · ${profile.fps_shops.shop_name}` : "No shop assigned"} · Family of ${profile.family_size}`}
       active={tab}
       onSelect={setTab}
       onSignOut={signOut}
@@ -331,62 +331,138 @@ function VerificationTab({ userId }: { userId: string }) {
   );
 }
 
+
 function HomeTab({ profile }: { profile: any }) {
   const { data: entitlements } = useQuery({
     queryKey: ["entitlements", profile.ration_cards?.card_category],
-    queryFn: () => apiGet<any[]>(`/beneficiary/entitlements?category=${encodeURIComponent(profile.ration_cards.card_category)}`),
+    queryFn: () =>
+      apiGet<any[]>(
+        `/beneficiary/entitlements?category=${encodeURIComponent(
+          profile.ration_cards?.card_category ?? ""
+        )}`
+      ),
   });
+
   return (
     <>
-      <section className={`overflow-hidden rounded-xl p-5 shadow-sm ${profile.ration_cards?.card_category === "Yellow" ? "bg-amber-300 text-amber-950" : profile.ration_cards?.card_category === "Orange" ? "bg-orange-300 text-orange-950" : "border border-border bg-white text-slate-900"}`}>
+      <section
+        className={`overflow-hidden rounded-xl p-5 shadow-sm ${
+          profile.ration_cards?.card_category === "Yellow"
+            ? "bg-amber-300 text-amber-950"
+            : profile.ration_cards?.card_category === "Orange"
+              ? "bg-orange-300 text-orange-950"
+              : "border border-border bg-white text-slate-900"
+        }`}
+      >
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-bold uppercase">AnnaSeva · Ration card</p>
-            <h2 className="mt-1 text-xl font-bold">{profile.ration_cards?.card_category} card</h2>
-            <p className="mt-1 text-sm">कुटुंब सदस्य · Family of {profile.family_size}</p>
+            <p className="text-xs font-bold uppercase">
+              AnnaSeva · Ration card
+            </p>
+            <h2 className="mt-1 text-xl font-bold">
+              {profile.ration_cards?.card_category} card
+            </h2>
+            <p className="mt-1 text-sm">
+              कुटुंब सदस्य · Family of {profile.family_size}
+            </p>
           </div>
-          <StatusChip status={profile.ration_cards?.verification_status ?? "pending"} />
+
+          <StatusChip
+            status={
+              profile.ration_cards?.verification_status ?? "pending"
+            }
+          />
         </div>
+
         <div className="mt-5 flex items-end justify-between gap-3 border-t border-current/20 pt-3">
-          <div><p className="text-xs opacity-75">Card number · कार्ड क्रमांक</p><p className="text-lg font-bold tracking-wider">{profile.ration_cards?.masked_card_number}</p></div>
-          <p className="max-w-36 text-right text-xs font-semibold">{profile.fps_shops?.shop_name}</p>
+          <div>
+            <p className="text-xs opacity-75">
+              Card number · कार्ड क्रमांक
+            </p>
+            <p className="text-lg font-bold tracking-wider">
+              {profile.ration_cards?.masked_card_number}
+            </p>
+          </div>
+
+          <p className="max-w-36 text-right text-xs font-semibold">
+            {profile.fps_shops?.shop_name}
+          </p>
         </div>
       </section>
+
       <section>
         <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-muted-foreground">
-          Your monthly entitlement ({profile.ration_cards?.card_category} card · {profile.family_size} members)
+          Your monthly entitlement (
+          {profile.ration_cards?.card_category} card ·{" "}
+          {profile.family_size} members)
         </h2>
+
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {entitlements?.map((r: any) => (
-            <div key={r.id} className="annaseva-card flex min-h-28 items-center gap-4 p-3 sm:p-4">
-              {ENTITLEMENT_DETAILS[r.ration_items?.item_name]?.image ? (
-                <img
-                  src={ENTITLEMENT_DETAILS[r.ration_items.item_name].image}
-                  alt={r.ration_items.item_name}
-                  loading="lazy"
-                  className="h-20 w-20 shrink-0 rounded-lg object-cover"
-                />
-              ) : (
-                <div aria-hidden="true" className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-secondary/10 text-3xl">🌾</div>
-              )}
-              <div className="min-w-0">
-                <p className="text-lg font-bold text-foreground">{r.ration_items?.item_name}</p>
-                <p lang="mr" className="text-base font-semibold text-muted-foreground">{ENTITLEMENT_DETAILS[r.ration_items?.item_name]?.marathi}</p>
-                <p className="mt-1 text-xl font-bold text-secondary">
-                  {(r.quantity_per_person * profile.family_size).toFixed(1)} {r.ration_items?.unit}
-                </p>
-                <p className="text-xs text-muted-foreground">{r.scheme_name}</p>
+          {(entitlements ?? []).map((r: any) => {
+            const itemName: string | undefined =
+              r.ration_items?.item_name;
+
+            const details = itemName
+              ? ENTITLEMENT_DETAILS[itemName]
+              : undefined;
+
+            return (
+              <div
+                key={r.id}
+                className="annaseva-card flex min-h-28 items-center gap-4 p-3 sm:p-4"
+              >
+                {details?.image ? (
+                  <img
+                    src={details.image}
+                    alt={itemName ?? "Ration item"}
+                    loading="lazy"
+                    className="h-20 w-20 shrink-0 rounded-lg object-cover"
+                  />
+                ) : (
+                  <div
+                    aria-hidden="true"
+                    className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-secondary/10 text-3xl"
+                  >
+                    🌾
+                  </div>
+                )}
+
+                <div className="min-w-0">
+                  <p className="text-lg font-bold text-foreground">
+                    {itemName ?? "Ration item"}
+                  </p>
+
+                  <p
+                    lang="mr"
+                    className="text-base font-semibold text-muted-foreground"
+                  >
+                    {details?.marathi ?? ""}
+                  </p>
+
+                  <p className="mt-1 text-xl font-bold text-secondary">
+                    {(
+                      Number(r.quantity_per_person ?? 0) *
+                      Number(profile.family_size ?? 0)
+                    ).toFixed(1)}{" "}
+                    {r.ration_items?.unit}
+                  </p>
+
+                  <p className="text-xs text-muted-foreground">
+                    {r.scheme_name}
+                  </p>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </>
   );
 }
 
+
 function StockTab({ profile }: { profile: any }) {
-  const { data: stock, isLoading } = useQuery({
+  const { data: stock, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ["stock", profile.fps_id],
     queryFn: () => apiGet<any[]>("/beneficiary/stock"),
   });
@@ -394,6 +470,7 @@ function StockTab({ profile }: { profile: any }) {
 
   const items = stock ?? [];
   const lowCount = items.filter((item: any) => Number(item.closing_stock) <= Number(item.minimum_threshold)).length;
+  const assignedShop = profile.fps_shops ?? items[0]?.fps_shops;
 
   return (
     <div className="space-y-4">
@@ -402,15 +479,46 @@ function StockTab({ profile }: { profile: any }) {
           <div>
             <p className="text-xs font-bold uppercase opacity-75">Fair price shop</p>
             <h2 className="mt-1 text-xl font-bold">Stock availability</h2>
-            <p className="mt-1 text-sm opacity-80">{profile.fps_shops?.shop_name ?? "Your assigned shop"}</p>
+            <p className="mt-1 text-sm opacity-80">{assignedShop?.shop_name ?? "No shop assigned"}</p>
           </div>
           <Package className="h-8 w-8 shrink-0 opacity-85" />
         </div>
+        {assignedShop && (
+          <dl className="mt-4 grid gap-x-6 gap-y-3 border-t border-primary-foreground/20 pt-4 text-sm sm:grid-cols-2">
+            <div>
+              <dt className="text-xs opacity-75">FPS shop ID</dt>
+              <dd className="mt-0.5 font-semibold">{assignedShop.fps_id ?? assignedShop.shop_code}</dd>
+            </div>
+            <div>
+              <dt className="text-xs opacity-75">Shopkeeper</dt>
+              <dd className="mt-0.5 font-semibold">{assignedShop.shopkeeper_name ?? "Not assigned"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs opacity-75">Shop address</dt>
+              <dd className="mt-0.5 font-semibold">
+                {[assignedShop.address, assignedShop.taluka, assignedShop.district].filter(Boolean).join(", ") || "Not on file"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs opacity-75">Shopkeeper mobile</dt>
+              <dd className="mt-0.5 font-semibold">{assignedShop.shopkeeper_mobile_number ?? "Not on file"}</dd>
+            </div>
+          </dl>
+        )}
         <div className="mt-5 grid grid-cols-2 gap-4 border-t border-primary-foreground/20 pt-4">
           <div><p className="text-xs opacity-75">Items listed</p><p className="mt-1 text-2xl font-bold tabular-nums">{items.length}</p></div>
           <div><p className="text-xs opacity-75">Below reserve level</p><p className="mt-1 flex items-center gap-2 text-2xl font-bold tabular-nums">{lowCount}<CircleAlert className="h-5 w-5" /></p></div>
         </div>
       </section>
+
+      {isError && (
+        <div role="alert" className="rounded-lg bg-destructive/10 p-4 text-sm text-destructive">
+          <p>Could not load stock availability: {error.message}</p>
+          <button type="button" onClick={() => refetch()} disabled={isFetching} className="mt-2 font-bold underline disabled:opacity-50">
+            {isFetching ? "Retrying…" : "Try again"}
+          </button>
+        </div>
+      )}
 
       {items.length ? (
         <div className="grid gap-3 sm:grid-cols-2">
@@ -437,9 +545,9 @@ function StockTab({ profile }: { profile: any }) {
             );
           })}
         </div>
-      ) : (
+      ) : !isError ? (
         <EmptyState title="Stock information unavailable" hint="Your assigned shop has not published stock details yet." />
-      )}
+      ) : null}
       <p className="text-xs text-muted-foreground">Availability can change during the day. Confirm with your fair price shop before traveling.</p>
     </div>
   );
@@ -767,14 +875,24 @@ function SchemeTab({ profile }: { profile: SchemeProfile }) {
   });
   const schemeName = category === "Yellow" ? "AAY" : category === "Orange" ? "PHH" : null;
 
-  function formatDistributionDate(value: string) {
-    const [year, month, day] = value.slice(0, 10).split("-").map(Number);
-    return new Date(year, month - 1, day).toLocaleDateString(undefined, {
+
+function formatDistributionDate(value: string) {
+  const parts = value.slice(0, 10).split("-").map(Number);
+
+  const year = parts[0] ?? 0;
+  const month = parts[1] ?? 1;
+  const day = parts[2] ?? 1;
+
+  return new Date(year, month - 1, day).toLocaleDateString(
+    undefined,
+    {
       day: "numeric",
       month: "short",
       year: "numeric",
-    });
-  }
+    }
+  );
+}
+
 
   return (
     <div className="space-y-4">

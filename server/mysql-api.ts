@@ -242,8 +242,13 @@ app.post("/api/auth/signout", asyncRoute(async (request, response) => {
   response.json({ ok: true });
 }));
 
+
 app.get("/api/shops", requireUser(), asyncRoute(async (_request, response) => {
-  const [rows] = await pool.query("SELECT id, shop_name, shop_code, district, status FROM fps_shops WHERE status = 'active' ORDER BY shop_code");
+  const [rows] = await pool.query(
+    `SELECT id, shop_code, shop_name, address, district, taluka, contact_number, operating_hours
+     FROM fps_shops WHERE status = 'active' ORDER BY shop_code`,
+  );
+
   response.json(rows);
 }));
 
@@ -320,13 +325,19 @@ app.get("/api/beneficiary/profile", requireUser(["beneficiary"]), asyncRoute(asy
     `SELECT bp.*, p.aadhaar_address, p.aadhaar_linked_mobile,
        rc.id AS card_id, rc.masked_card_number, rc.card_category, rc.aadhaar_last4, rc.verification_status,
        uv.phone_verified_at, uv.identity_status,
+       COALESCE(bp.selected_fps_id, bp.fps_id) AS selected_shop_id,
        fs.id AS shop_id, fs.shop_name, fs.shop_code, fs.address AS shop_address, fs.district, fs.taluka,
-       fs.contact_number AS shop_contact_number, fs.operating_hours
+       fs.contact_number AS shop_contact_number, fs.operating_hours,
+       shopkeeper_profile.full_name AS shopkeeper_name,
+       shopkeeper_profile.mobile_number AS shopkeeper_mobile_number
      FROM beneficiary_profiles bp
      JOIN profiles p ON p.id = bp.user_id
      LEFT JOIN ration_cards rc ON rc.id = bp.ration_card_id
      LEFT JOIN user_verifications uv ON uv.user_id = bp.user_id
-     LEFT JOIN fps_shops fs ON fs.id = bp.fps_id WHERE bp.user_id = ? LIMIT 1`,
+     LEFT JOIN fps_shops fs ON fs.id = COALESCE(bp.selected_fps_id, bp.fps_id)
+     LEFT JOIN shopkeepers sk ON sk.fps_id = fs.id
+     LEFT JOIN profiles shopkeeper_profile ON shopkeeper_profile.id = sk.user_id
+     WHERE bp.user_id = ? LIMIT 1`,
     [user.id],
   );
   const row = rows[0];
@@ -340,7 +351,7 @@ app.get("/api/beneficiary/profile", requireUser(["beneficiary"]), asyncRoute(asy
     members = memberRows;
   }
   response.json({
-    id: row.id, user_id: row.user_id, ration_card_id: row.ration_card_id, fps_id: row.fps_id, family_size: row.family_size,
+    id: row.id, user_id: row.user_id, ration_card_id: row.ration_card_id, fps_id: row.selected_shop_id, family_size: row.family_size,
     aadhaar_address: row.aadhaar_address,
     aadhaar_linked_mobile: row.aadhaar_linked_mobile,
     verification: { phone_verified_at: row.phone_verified_at, identity_status: row.identity_status ?? "not_submitted" },
@@ -355,6 +366,7 @@ app.get("/api/beneficiary/profile", requireUser(["beneficiary"]), asyncRoute(asy
     } : null,
     fps_shops: row.shop_id ? {
       id: row.shop_id,
+      fps_id: row.shop_code,
       shop_name: row.shop_name,
       shop_code: row.shop_code,
       address: row.shop_address,
@@ -362,6 +374,8 @@ app.get("/api/beneficiary/profile", requireUser(["beneficiary"]), asyncRoute(asy
       taluka: row.taluka,
       contact_number: row.shop_contact_number,
       operating_hours: row.operating_hours,
+      shopkeeper_name: row.shopkeeper_name,
+      shopkeeper_mobile_number: row.shopkeeper_mobile_number,
     } : null,
   });
 }));
@@ -383,7 +397,10 @@ app.post("/api/beneficiary/setup", requireUser(["beneficiary"]), asyncRoute(asyn
     const profileId = randomUUID();
     const cardNumber = `RC-****-${randomBytes(2).readUInt16BE() % 9000 + 1000}`;
     await connection.execute("INSERT INTO ration_cards (id, user_id, masked_card_number, card_category, aadhaar_last4) VALUES (?, ?, ?, ?, ?)", [cardId, user.id, cardNumber, category, aadhaarLast4]);
-    await connection.execute("INSERT INTO beneficiary_profiles (id, user_id, ration_card_id, fps_id, family_size) VALUES (?, ?, ?, ?, ?)", [profileId, user.id, cardId, fpsId, familySize]);
+    await connection.execute(
+      "INSERT INTO beneficiary_profiles (id, user_id, ration_card_id, fps_id, selected_fps_id, family_size) VALUES (?, ?, ?, ?, ?, ?)",
+      [profileId, user.id, cardId, fpsId, fpsId, familySize],
+    );
     await connection.commit();
     response.status(201).json({ id: profileId });
   } catch (error) {
@@ -458,17 +475,63 @@ app.get("/api/beneficiary/scheme-transactions", requireUser(["beneficiary"]), as
   })));
 }));
 
+
 app.get("/api/beneficiary/stock", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
   const user = current(request);
+
   const [rows] = await pool.execute<mysql.RowDataPacket[]>(
-    `SELECT st.*, ri.item_name, ri.unit, fs.shop_name, fs.operating_hours
-     FROM fps_stock st JOIN ration_items ri ON ri.id = st.item_id
-     JOIN fps_shops fs ON fs.id = st.fps_id
-     JOIN beneficiary_profiles bp ON bp.fps_id = st.fps_id
-     WHERE bp.user_id = ? ORDER BY ri.item_name`, [user.id],
+    `SELECT
+       st.*,
+       ri.item_name,
+       ri.unit,
+       fs.id AS shop_id,
+       fs.shop_name,
+       fs.shop_code,
+       fs.address AS shop_address,
+       fs.district,
+       fs.taluka,
+       fs.contact_number AS shop_contact_number,
+       fs.operating_hours,
+       shopkeeper_profile.full_name AS shopkeeper_name,
+       shopkeeper_profile.mobile_number AS shopkeeper_mobile_number
+     FROM beneficiary_profiles bp
+     JOIN fps_shops fs
+       ON fs.id = COALESCE(bp.selected_fps_id, bp.fps_id)
+     JOIN fps_stock st
+       ON st.fps_id = fs.id
+     JOIN ration_items ri
+       ON ri.id = st.item_id
+     LEFT JOIN shopkeepers sk
+       ON sk.fps_id = fs.id
+     LEFT JOIN profiles shopkeeper_profile
+       ON shopkeeper_profile.id = sk.user_id
+     WHERE bp.user_id = ?
+     ORDER BY ri.item_name`,
+    [user.id],
   );
-  response.json(rows.map((row) => ({ ...row, ration_items: { item_name: row.item_name, unit: row.unit }, fps_shops: { shop_name: row.shop_name, operating_hours: row.operating_hours } })));
+
+  response.json(rows.map((row) => ({
+    ...row,
+    ration_items: {
+      item_name: row.item_name,
+      unit: row.unit,
+    },
+    fps_shops: {
+      id: row.shop_id,
+      fps_id: row.shop_code,
+      shop_name: row.shop_name,
+      shop_code: row.shop_code,
+      address: row.shop_address,
+      district: row.district,
+      taluka: row.taluka,
+      contact_number: row.shop_contact_number,
+      operating_hours: row.operating_hours,
+      shopkeeper_name: row.shopkeeper_name,
+      shopkeeper_mobile_number: row.shopkeeper_mobile_number,
+    },
+  })));
 }));
+
 
 app.get("/api/beneficiary/bookings", requireUser(["beneficiary"]), asyncRoute(async (request, response) => {
   const user = current(request);
@@ -1074,6 +1137,37 @@ app.get("/api/admin/shops", requireUser(["admin"]), asyncRoute(async (_request, 
   const [rows] = await pool.query("SELECT * FROM fps_shops ORDER BY shop_code");
   response.json(rows);
 }));
+
+
+app.get(
+  "/api/admin/shopkeepers",
+  requireUser(["admin"]),
+  asyncRoute(async (_request, response) => {
+    const [rows] = await pool.query(
+      `SELECT
+         sk.id,
+         sk.user_id,
+         au.email,
+         p.full_name,
+         p.mobile_number,
+         fs.shop_code,
+         fs.shop_name,
+         fs.address AS shop_address,
+         fs.status AS shop_status
+       FROM shopkeepers sk
+       INNER JOIN app_users au
+         ON au.id = sk.user_id
+       LEFT JOIN profiles p
+         ON p.id = au.id
+       LEFT JOIN fps_shops fs
+         ON fs.id = sk.fps_id
+       ORDER BY p.full_name ASC`
+    );
+
+    response.json(rows);
+  })
+);
+
 app.get("/api/admin/stock", requireUser(["admin"]), asyncRoute(async (_request, response) => {
   const [rows] = await pool.query<mysql.RowDataPacket[]>(
     `SELECT st.*, ri.item_name, ri.unit, fs.shop_name, fs.shop_code FROM fps_stock st

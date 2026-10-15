@@ -195,37 +195,111 @@ function DashboardTab() {
 
 function ShopsTab() {
   const queryClient = useQueryClient();
-  const { data: shops, isLoading } = useQuery({ queryKey: ["shops"], queryFn: () => apiGet<any[]>("/admin/shops") });
-  const toggle = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) => apiPatch(`/admin/shops/${id}/status`, { status }),
-    onSuccess: () => Promise.all([queryClient.invalidateQueries({ queryKey: ["shops"] }), queryClient.invalidateQueries({ queryKey: ["admin-overview"] })]),
+
+  const {
+    data: shops,
+    isLoading: shopsLoading,
+  } = useQuery({
+    queryKey: ["shops"],
+    queryFn: () => apiGet<any[]>("/admin/shops"),
   });
-  if (isLoading) return <LoadingBlock />;
+
+  const {
+    data: shopkeepers,
+    isLoading: shopkeepersLoading,
+  } = useQuery({
+    queryKey: ["shopkeepers"],
+    queryFn: () => apiGet<any[]>("/admin/shopkeepers"),
+  });
+
+  const toggle = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      apiPatch(`/admin/shops/${id}/status`, { status }),
+
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["shops"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-overview"] }),
+      ]),
+  });
+
+  if (shopsLoading || shopkeepersLoading) return <LoadingBlock />;
+
   return (
     <div className="space-y-3">
-      {shops?.map((shop) => (
-        <article key={shop.id} className="annaseva-card flex flex-wrap items-center justify-between gap-3 p-4">
-          <div>
-            <div className="flex items-center gap-2"><Store className="h-4 w-4 text-primary" /><h3 className="font-bold text-foreground">{shop.shop_name}</h3><StatusChip status={shop.status} /></div>
-            <p className="mt-1 text-xs text-muted-foreground">{shop.shop_code} · {shop.address}, {shop.taluka}, {shop.district}</p>
-            <p className="text-xs text-muted-foreground">Hours: {shop.operating_hours}</p>
-          </div>
-          <button
-            onClick={() => toggle.mutate({ id: shop.id, status: shop.status === "active" ? "closed" : "active" })}
-            disabled={toggle.isPending}
-            className="rounded-lg border border-input px-3 py-2 text-xs font-bold text-foreground disabled:opacity-50"
+      {shops?.map((shop) => {
+        const shopkeeper = shopkeepers?.find(
+          (item) => item.shop_code === shop.shop_code
+        );
+
+        return (
+          <article
+            key={shop.id}
+            className="annaseva-card flex flex-wrap items-center justify-between gap-3 p-4"
           >
-            {shop.status === "active" ? "Mark closed" : "Mark open"}
-          </button>
-        </article>
-      ))}
+            <div>
+              <div className="flex items-center gap-2">
+                <Store className="h-4 w-4 text-primary" />
+                <h3 className="font-bold text-foreground">
+                  {shop.shop_name}
+                </h3>
+                <StatusChip status={shop.status} />
+              </div>
+
+              <p className="mt-1 text-xs text-muted-foreground">
+                {shop.shop_code} · {shop.address}, {shop.taluka},{" "}
+                {shop.district}
+              </p>
+
+              <p className="text-xs text-muted-foreground">
+                Hours: {shop.operating_hours}
+              </p>
+
+              <div className="mt-2 space-y-1">
+                <p className="text-sm text-foreground">
+                  <strong>Shopkeeper:</strong>{" "}
+                  {shopkeeper?.full_name || "Not assigned"}
+                </p>
+
+                {shopkeeper?.email && (
+                  <p className="text-xs text-muted-foreground">
+                    Email: {shopkeeper.email}
+                  </p>
+                )}
+
+                {shopkeeper?.mobile_number && (
+                  <p className="text-xs text-muted-foreground">
+                    Mobile: {shopkeeper.mobile_number}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={() =>
+                toggle.mutate({
+                  id: shop.id,
+                  status:
+                    shop.status === "active" ? "closed" : "active",
+                })
+              }
+              disabled={toggle.isPending}
+              className="rounded-lg border border-input px-3 py-2 text-xs font-bold text-foreground disabled:opacity-50"
+            >
+              {shop.status === "active" ? "Mark closed" : "Mark open"}
+            </button>
+          </article>
+        );
+      })}
     </div>
   );
 }
 
 function StockTab() {
-  const { data: stock, isLoading } = useQuery({ queryKey: ["all-stock"], queryFn: () => apiGet<any[]>("/admin/stock") });
+  const { data: stock, isLoading, isError, error } = useQuery({ queryKey: ["all-stock"], queryFn: () => apiGet<any[]>("/admin/stock") });
   if (isLoading) return <LoadingBlock />;
+  if (isError) return <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">Could not load shop stock: {error.message}</p>;
+  if (!stock?.length) return <EmptyState title="No stock records available" hint="Import the FPS shops and publish stock for their ration items to see availability here." />;
   const lowStock = stock?.filter((row) => Number(row.closing_stock) <= Number(row.minimum_threshold)) ?? [];
   return (
     <div className="space-y-3">
