@@ -144,6 +144,7 @@ CREATE TABLE IF NOT EXISTS beneficiary_profiles (
   user_id CHAR(36) NOT NULL UNIQUE,
   ration_card_id CHAR(36) NULL,
   fps_id CHAR(36) NULL,
+  selected_fps_id CHAR(36) NULL,
   family_size INT NOT NULL DEFAULT 4,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_beneficiary_user FOREIGN KEY (user_id)
@@ -151,6 +152,8 @@ CREATE TABLE IF NOT EXISTS beneficiary_profiles (
   CONSTRAINT fk_beneficiary_card FOREIGN KEY (ration_card_id)
     REFERENCES ration_cards(id) ON DELETE SET NULL,
   CONSTRAINT fk_beneficiary_shop FOREIGN KEY (fps_id)
+    REFERENCES fps_shops(id) ON DELETE SET NULL,
+  CONSTRAINT fk_beneficiary_selected_shop FOREIGN KEY (selected_fps_id)
     REFERENCES fps_shops(id) ON DELETE SET NULL,
   CONSTRAINT chk_beneficiary_family_size CHECK (family_size BETWEEN 1 AND 20)
 ) ENGINE=InnoDB;
